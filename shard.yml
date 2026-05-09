@@ -1,0 +1,24 @@
+name: termify
+version: 0.5.0
+license: MPL-2.0
+authors:
+  - nogginly <nogginly@icloud.com>
+
+development_dependencies:
+  ameba:
+    github: crystal-ameba/ameba
+  spectator:
+    gitlab: arctic-fox/spectator
+
+dependencies:
+  tablo:
+    github: hutou/tablo
+    version: 1.1.0
+  tartrazine:
+    github: ralsina/tartrazine
+
+targets:
+  md2term:
+    main: samples/md2term.cr
+  hello:
+    main: samples/hello.cr
