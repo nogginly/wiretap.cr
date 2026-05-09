@@ -1,24 +1,13 @@
-name: termify
-version: 0.5.0
+name: wiretap
 license: MPL-2.0
 authors:
   - nogginly <nogginly@icloud.com>
+description: Record and replay HTTP interactions for deterministic testing
+
+version: 0.1.0
+
+crystal: ">= 1.9.0"
 
 development_dependencies:
   ameba:
     github: crystal-ameba/ameba
-  spectator:
-    gitlab: arctic-fox/spectator
-
-dependencies:
-  tablo:
-    github: hutou/tablo
-    version: 1.1.0
-  tartrazine:
-    github: ralsina/tartrazine
-
-targets:
-  md2term:
-    main: samples/md2term.cr
-  hello:
-    main: samples/hello.cr
