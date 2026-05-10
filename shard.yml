@@ -1,13 +1,10 @@
 name: wiretap
+version: 0.2.0
 license: MPL-2.0
 authors:
   - nogginly <nogginly@icloud.com>
 description: Record and replay HTTP interactions for deterministic testing
-
-version: 0.1.0
-
 crystal: ">= 1.18.0"
-
 development_dependencies:
   ameba:
     github: crystal-ameba/ameba

@@ -1,157 +1,296 @@
-module Wiretap
-  module Interceptor
-    # Entry point called from the HTTP::Client reopen below.
-    # Dispatches based on transcript mode: replay, record, or pass-through.
-    def self.handle(
-      transcript : Transcript,
-      client : HTTP::Client,
-      request : HTTP::Request,
-      &real_request : -> HTTP::Client::Response
-    ) : HTTP::Client::Response
-      url = build_url(client, request)
+require "./spec_helper"
 
-      case transcript.mode
-      when :none
-        # Strict replay. Raise immediately on any unrecognised request.
-        replay_or_raise(transcript, request.method, url)
-      when :always
-        # Always re-record, even if the transcript already holds interactions.
-        record_and_return(transcript, request, url, real_request)
-      when :once
-        if transcript.loaded?
-          # Transcript file existed on disk — treat it as frozen.
-          # Any request not in the transcript is an error, the same as :none.
-          replay_or_raise(transcript, request.method, url)
-        else
-          # First recording run — make the real request and capture it.
-          record_and_return(transcript, request, url, real_request)
-        end
-      else
-        real_request.call
+# ---------------------------------------------------------------------------
+# Integration specs — real HTTP::Server, real sockets, real IO.
+#
+# A single TestServer instance is started once for the suite and shared
+# across all examples. Each endpoint tracks how many times it was called
+# so specs can assert whether a request hit the real server or was replayed
+# from a transcript without touching the network.
+# ---------------------------------------------------------------------------
+
+class TestServer
+  getter request_counts : Hash(String, Int32)
+
+  @server : HTTP::Server
+  @base_url : String
+
+  def initialize
+    @request_counts = Hash(String, Int32).new(0)
+    @base_url = ""
+    @server = HTTP::Server.new { |ctx| handle(ctx) }
+  end
+
+  # Binds to an OS-assigned free port and starts listening in a fiber.
+  # Returns the base URL callers should use, e.g. "http://localhost:54321".
+  def start : String
+    address = @server.bind_unused_port
+    spawn { @server.listen }
+    @base_url = "http://#{address}"
+  end
+
+  def close : Nil
+    @server.close
+  end
+
+  def base_url : String
+    @base_url
+  end
+
+  # Resets all counters between examples.
+  def reset_counts : Nil
+    @request_counts.transform_values! { 0 }
+  end
+
+  private def handle(ctx : HTTP::Server::Context) : Nil
+    path = ctx.request.path
+    @request_counts[path] = @request_counts.fetch(path, 0) + 1
+
+    ctx.response.content_type = "application/json"
+
+    case path
+    when "/status"
+      ctx.response.print %({"status":"ok"})
+    when "/chat"
+      ctx.response.status = HTTP::Status::CREATED
+      ctx.response.print %({"id":"msg_001","content":"Hello!"})
+    when "/error"
+      ctx.response.status = HTTP::Status::INTERNAL_SERVER_ERROR
+      ctx.response.print %({"error":"something went wrong"})
+    when "/stream"
+      ctx.response.headers["Content-Type"] = "text/event-stream"
+      ctx.response.headers["Cache-Control"] = "no-cache"
+      [
+        %(data: {"delta":{"content":"Hello"}}),
+        %(data: {"delta":{"content":" world"}}),
+        "data: [DONE]",
+      ].each do |chunk|
+        ctx.response.print "#{chunk}\n\n"
+        ctx.response.flush
       end
-    end
-
-    # --- private helpers ----------------------------------------------------
-
-    private def self.replay_or_raise(transcript : Transcript, method : String, url : String) : HTTP::Client::Response
-      interaction = transcript.find_interaction(method, url)
-      raise Wiretap::Error.new("No recorded interaction for #{method} #{url}") unless interaction
-      build_response(interaction.response.status, interaction.response.headers, interaction.response.body)
-    end
-
-    private def self.record_and_return(
-      transcript : Transcript,
-      request : HTTP::Request,
-      url : String,
-      real_request : -> HTTP::Client::Response,
-    ) : HTTP::Client::Response
-      # Read the request body before the real call so we can store it, then
-      # reset it on the request so the actual HTTP send is unaffected.
-      req_body = read_and_reset_body(request)
-
-      raw = real_request.call
-      body = raw.body
-
-      req_data = RequestData.new(
-        method: request.method,
-        url: url,
-        headers: filter_headers(request.headers),
-        body: req_body
-      )
-      resp_data = ResponseData.new(
-        status: raw.status.code,
-        headers: normalize_headers(raw.headers),
-        body: body
-      )
-      transcript.record(Interaction.new(req_data, resp_data))
-
-      # Return a fresh response; the original `raw` body has been consumed.
-      build_response(raw.status.code, raw.headers, body)
-    end
-
-    # Builds a response from live HTTP::Headers (used after a real request).
-    private def self.build_response(status : Int32, headers : HTTP::Headers, body : String) : HTTP::Client::Response
-      HTTP::Client::Response.new(status, body: body, headers: headers)
-    end
-
-    # Builds a response from a stored Hash (used during replay).
-    private def self.build_response(status : Int32, headers : Hash(String, String), body : String) : HTTP::Client::Response
-      h = HTTP::Headers.new
-      headers.each { |k, v| h[k] = v }
-      HTTP::Client::Response.new(status, body: body, headers: h)
-    end
-
-    # Constructs the full URL from the HTTP::Client instance and request.
-    # Omits the port when it matches the scheme default (80/443).
-    private def self.build_url(client : HTTP::Client, request : HTTP::Request) : String
-      scheme = client.tls? ? "https" : "http"
-      host = client.host
-      port = client.port
-      default_port = scheme == "https" ? 443 : 80
-      port_suffix = port == default_port ? "" : ":#{port}"
-      "#{scheme}://#{host}#{port_suffix}#{request.resource}"
-    end
-
-    # Reads the request body IO to a String for recording, then replaces the
-    # body with a fresh IO::Memory so the actual HTTP send is unaffected.
-    # Returns nil for requests with no body or an empty body.
-    private def self.read_and_reset_body(request : HTTP::Request) : String?
-      body_io = request.body
-      return nil unless body_io
-
-      content = body_io.gets_to_end
-      return nil if content.empty?
-
-      # body=(String) creates a new IO::Memory and updates Content-Length.
-      request.body = content
-      content
-    end
-
-    # Converts HTTP::Headers to a plain Hash, replacing filtered header
-    # values with "[FILTERED]". Multi-value headers are joined with ", ".
-    private def self.filter_headers(headers : HTTP::Headers) : Hash(String, String)
-      filter_list = Wiretap.config.filter_headers.map(&.downcase)
-      result = {} of String => String
-      headers.each do |name, values|
-        result[name] = filter_list.includes?(name.downcase) ? "[FILTERED]" : values.join(", ")
-      end
-      result
-    end
-
-    # Converts HTTP::Headers to a plain Hash for storage.
-    private def self.normalize_headers(headers : HTTP::Headers) : Hash(String, String)
-      result = {} of String => String
-      headers.each { |name, values| result[name] = values.join(", ") }
-      result
+    else
+      ctx.response.status = HTTP::Status::NOT_FOUND
+      ctx.response.print %({"error":"not found"})
     end
   end
 end
 
 # ---------------------------------------------------------------------------
-# HTTP::Client reopen — the interception wedge point.
-#
-# All convenience class methods (HTTP::Client.get, .post, etc.) and all
-# instance exec overloads taking (method, path, ...) ultimately call one
-# of these two exec(request) forms. Intercepting here covers the full
-# surface area without patching every overload.
-#
-# `previous_def` calls the original method as it existed before this reopen.
+# Suite setup — server starts once for the whole file.
+# Per-example transcript dir is handled inside the describe block.
 # ---------------------------------------------------------------------------
-class HTTP::Client
-  # Non-streaming form — fully buffers response body into a String.
-  # This is the form used by most LLM client wrappers.
-  def exec(request : HTTP::Request) : HTTP::Client::Response
-    if transcript = Wiretap.active_transcript
-      Wiretap::Interceptor.handle(transcript, self, request) { previous_def }
-    else
-      previous_def
+
+test_server = TestServer.new
+current_dir = [""]
+
+Spec.before_suite { test_server.start }
+Spec.after_suite { test_server.close }
+
+# ---------------------------------------------------------------------------
+# Specs
+# ---------------------------------------------------------------------------
+
+describe "Wiretap integration" do
+  before_each do
+    current_dir[0] = tmp_transcript_dir
+    Wiretap.configure { |c| c.transcript_dir = current_dir[0] }
+    test_server.reset_counts
+  end
+
+  after_each do
+    FileUtils.rm_rf(current_dir[0]) unless current_dir[0].empty?
+  end
+
+  describe ":once mode — first run records, second run replays" do
+    it "makes a real request and saves a transcript on first run" do
+      Wiretap.intercept("get_status", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      # Server was actually called.
+      test_server.request_counts["/status"].should eq(1)
+
+      # Transcript was written to disk.
+      path = File.join(current_dir[0], "get_status.json")
+      File.exists?(path).should be_true
+
+      # Transcript contains the interaction.
+      t = Wiretap::Transcript.load_or_create("get_status", :once)
+      t.interactions.size.should eq(1)
+      t.interactions.first.response.body.should eq(%({"status":"ok"}))
+    end
+
+    it "replays from transcript on second run without hitting the server" do
+      # First run — record.
+      Wiretap.intercept("get_status_replay", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      test_server.reset_counts
+
+      # Second run — replay.
+      response = uninitialized HTTP::Client::Response
+      Wiretap.intercept("get_status_replay", mode: :once) do
+        response = HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      # Server was NOT called during replay.
+      test_server.request_counts.fetch("/status", 0).should eq(0)
+
+      response.status.code.should eq(200)
+      response.body.should eq(%({"status":"ok"}))
+    end
+
+    it "records a POST with body and replays it correctly" do
+      Wiretap.intercept("post_chat", mode: :once) do
+        HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"test","messages":[]})
+        )
+      end
+
+      test_server.reset_counts
+
+      response = uninitialized HTTP::Client::Response
+      Wiretap.intercept("post_chat", mode: :once) do
+        response = HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"test","messages":[]})
+        )
+      end
+
+      test_server.request_counts.fetch("/chat", 0).should eq(0)
+      response.status.code.should eq(201)
+      response.body.should eq(%({"id":"msg_001","content":"Hello!"}))
+    end
+
+    it "records non-200 status codes faithfully" do
+      Wiretap.intercept("server_error", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/error")
+      end
+
+      response = uninitialized HTTP::Client::Response
+      Wiretap.intercept("server_error", mode: :once) do
+        response = HTTP::Client.get("#{test_server.base_url}/error")
+      end
+
+      response.status.code.should eq(500)
+      response.body.should eq(%({"error":"something went wrong"}))
     end
   end
 
-  # Streaming form — yields a Response whose body_io must be read within
-  # the block. Wiretap passes this through unrecorded in v0.1.
-  # Streaming transcript support is planned for v0.2.
-  def exec(request : HTTP::Request, &block : HTTP::Client::Response ->)
-    previous_def { |response| block.call(response) }
+  describe ":always mode — re-records on every run" do
+    it "overwrites an existing transcript and hits the server again" do
+      # First run — record.
+      Wiretap.intercept("always_test", mode: :always) do
+        HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      test_server.reset_counts
+
+      # Second run — should hit server again, not replay.
+      Wiretap.intercept("always_test", mode: :always) do
+        HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      test_server.request_counts["/status"].should eq(1)
+    end
+  end
+
+  describe ":none mode — strict replay only" do
+    it "raises Wiretap::Error when no transcript exists" do
+      expect_raises(Wiretap::Error, /No recorded interaction/) do
+        Wiretap.intercept("no_such_transcript", mode: :none) do
+          HTTP::Client.get("#{test_server.base_url}/status")
+        end
+      end
+    end
+
+    it "does not hit the server when replaying" do
+      # Seed a transcript by recording first.
+      Wiretap.intercept("none_test", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      test_server.reset_counts
+
+      Wiretap.intercept("none_test", mode: :none) do
+        HTTP::Client.get("#{test_server.base_url}/status")
+      end
+
+      test_server.request_counts.fetch("/status", 0).should eq(0)
+    end
+  end
+
+  describe "header filtering" do
+    it "does not write Authorization values to the transcript" do
+      Wiretap.intercept("auth_header_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"Authorization" => "Bearer super_secret"}
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("auth_header_test", :once)
+      stored = t.interactions.first.request.headers["Authorization"]?
+      stored.should eq("[FILTERED]")
+    end
+  end
+
+  describe "streaming (SSE) — record and replay" do
+    it "records a streaming response and saves the body to the transcript" do
+      Wiretap.intercept("stream_record", mode: :once) do
+        client = HTTP::Client.new(URI.parse(test_server.base_url))
+        client.exec(HTTP::Request.new("GET", "/stream")) do |response|
+          response.body_io.gets_to_end
+        end
+      end
+
+      test_server.request_counts["/stream"].should eq(1)
+
+      t = Wiretap::Transcript.load_or_create("stream_record", :once)
+      t.interactions.size.should eq(1)
+      t.interactions.first.response.body.should contain("Hello")
+      t.interactions.first.response.body.should contain("[DONE]")
+    end
+
+    it "replays a streaming response via body_io without hitting the server" do
+      # First run — record.
+      Wiretap.intercept("stream_replay", mode: :once) do
+        client = HTTP::Client.new(URI.parse(test_server.base_url))
+        client.exec(HTTP::Request.new("GET", "/stream")) do |response|
+          response.body_io.gets_to_end
+        end
+      end
+
+      test_server.reset_counts
+
+      # Second run — replay.
+      replayed_body = ""
+      Wiretap.intercept("stream_replay", mode: :once) do
+        client = HTTP::Client.new(URI.parse(test_server.base_url))
+        client.exec(HTTP::Request.new("GET", "/stream")) do |response|
+          replayed_body = response.body_io.gets_to_end
+        end
+      end
+
+      test_server.request_counts.fetch("/stream", 0).should eq(0)
+      replayed_body.should contain("Hello")
+      replayed_body.should contain(" world")
+      replayed_body.should contain("[DONE]")
+    end
+
+    it "raises Wiretap::Error in :none mode when no streaming transcript exists" do
+      expect_raises(Wiretap::Error, /No recorded interaction/) do
+        Wiretap.intercept("stream_missing", mode: :none) do
+          client = HTTP::Client.new(URI.parse(test_server.base_url))
+          client.exec(HTTP::Request.new("GET", "/stream")) do |response|
+            response.body_io.gets_to_end
+          end
+        end
+      end
+    end
   end
 end

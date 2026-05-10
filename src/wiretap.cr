@@ -8,7 +8,8 @@ require "./wiretap/transcript"
 require "./wiretap/interceptor"
 
 module Wiretap
-  VERSION = "0.1.0"
+  # :nodoc:
+  VERSION = {{ `shards version #{__DIR__}`.chomp.stringify }}
 
   # ---------------------------------------------------------------------------
   # Configuration
@@ -65,7 +66,7 @@ module Wiretap
   #
   # Options:
   #   mode: overrides Wiretap.config.record_mode for this block only.
-  def self.intercept(name : String, mode : Symbol = config.record_mode, &block) : Nil
+  def self.intercept(name : String, mode : Symbol = config.record_mode, &) : Nil
     transcript = Transcript.load_or_create(name, mode)
     self.active_transcript = transcript
 

@@ -22,9 +22,9 @@ See [DISCLOSURE](DISCLOSURE.md) for how I used AI for this project.
 
 ### How Wiretap works
 
-Wiretap sits between your test code and `HTTP::Client`. On the first run it lets requests through to the real server and saves each request/response pair to a **transcript** — a JSON file on disk. On subsequent runs it intercepts matching requests and replays the saved response without touching the network.
+Wiretap sits between your test code and `HTTP::Client`. On the first run it lets requests through to the real server and saves each request/response pair to a **transcript** - a JSON file on disk. On subsequent runs it intercepts matching requests and replays the saved response without touching the network.
 
-**First run — record**
+**First run - record**
 
 ```mermaid
 sequenceDiagram
@@ -44,7 +44,7 @@ sequenceDiagram
     W-->>T: response
 ```
 
-**Subsequent runs — replay**
+**Subsequent runs - replay**
 
 ```mermaid
 sequenceDiagram
@@ -65,7 +65,6 @@ sequenceDiagram
 
 Transcripts are stored as human-readable JSON under `spec/transcripts/` and should be committed to version control. Once recorded, your tests run offline, deterministically, and fast.
 
----
 
 ### Configuration
 
@@ -81,10 +80,9 @@ Wiretap.configure do |c|
 end
 ```
 
-`filter_headers` — header names whose values are replaced with `[FILTERED]`
+`filter_headers` - header names whose values are replaced with `[FILTERED]`
 before saving. `Authorization` and `X-Api-Key` are filtered by default.
 
----
 
 ### Record modes
 
@@ -102,7 +100,6 @@ Wiretap.intercept("my_test", mode: :none) do
 end
 ```
 
----
 
 ### Basic usage
 
@@ -157,9 +154,70 @@ end
 ```
 
 Record this once against a real rate-limited request, or create the
-transcript by hand — any valid JSON file in `spec/transcripts/` works.
+transcript by hand - any valid JSON file in `spec/transcripts/` works.
 
----
+
+### Streaming responses (SSE)
+
+LLM APIs that stream tokens use Server-Sent Events over a chunked HTTP
+response. Wiretap handles these through the block form of `HTTP::Client#exec`.
+On record it buffers the full stream and saves it to the transcript. On replay
+it wraps the stored body in `IO::Memory`, satisfying the `body_io` contract so
+your parsing code runs identically against live and replayed responses.
+
+```crystal
+it "streams a completion" do
+  Wiretap.intercept("streaming_chat") do
+    client = HTTP::Client.new(URI.parse("https://api.example.com"))
+    client.exec(HTTP::Request.new("POST", "/v1/chat/completions",
+      headers: HTTP::Headers{
+        "Authorization" => "Bearer #{ENV["API_KEY"]}",
+        "Content-Type"  => "application/json",
+      },
+      body: {model: "my-model", stream: true, messages: [{role: "user", content: "Hello"}]}.to_json
+    )) do |response|
+      response.body_io.each_line do |line|
+        next unless line.starts_with?("data: ")
+        data = line.lchop("data: ")
+        break if data == "[DONE]"
+        chunk = JSON.parse(data)
+        print chunk["delta"]["content"].as_s
+      end
+    end
+  end
+end
+```
+
+The transcript stores the full SSE body as a single string - chunk boundaries
+are preserved in the content, so `each_line` iteration works identically during
+replay.
+
+**Streaming diagram**
+
+```mermaid
+sequenceDiagram
+    participant T as Test code
+    participant W as Wiretap
+    participant C as HTTP::Client
+    participant S as Real server
+    participant D as Transcript (disk)
+
+    Note over W,D: First run - record
+    T->>W: intercept("name") do ... end
+    W->>C: exec(request) { |r| ... }
+    C->>S: real HTTP request
+    S-->>C: chunked SSE stream
+    C-->>W: body_io (buffered)
+    W->>D: save full body as string
+    W-->>T: replayed IO::Memory
+
+    Note over W,D: Subsequent runs - replay
+    T->>W: intercept("name") do ... end
+    W->>D: find_interaction(method, url)
+    D-->>W: stored body string
+    W-->>T: IO::Memory (no network call)
+```
+
 
 ### Using with Spectator
 
@@ -188,7 +246,6 @@ Spectator.before_suite do
 end
 ```
 
----
 
 ### Transcript files
 
@@ -225,11 +282,10 @@ A transcript is a plain JSON file you can read, edit, and commit:
 To update a transcript, delete the file and run the test once with network
 access, or set `mode: :always` for that block temporarily.
 
----
 
 ### Recommended CI setup
 
-In CI you want strict replay — no live calls, no network dependency:
+In CI you want strict replay - no live calls, no network dependency:
 
 ```crystal
 # spec/spec_helper.cr
