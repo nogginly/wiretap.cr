@@ -6,7 +6,7 @@ description: Record and replay HTTP interactions for deterministic testing
 
 version: 0.1.0
 
-crystal: ">= 1.9.0"
+crystal: ">= 1.18.0"
 
 development_dependencies:
   ameba:
