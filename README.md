@@ -80,8 +80,19 @@ Wiretap.configure do |c|
 end
 ```
 
-`filter_headers` - header names whose values are replaced with `[FILTERED]`
-before saving. `Authorization` and `X-Api-Key` are filtered by default.
+|Setting         |Default                         |Purpose                                               |
+|----------------|--------------------------------|------------------------------------------------------|
+|`transcript_dir`|`"spec/transcripts"`            |Where transcript JSON files are stored                |
+|`record_mode`   |`:once`                         |Default record mode for all `intercept` blocks        |
+|`filter_headers`|`["Authorization", "X-Api-Key"]`|Header values replaced with `[FILTERED]` before saving|
+|`normalize_url` |`nil`                           |Proc applied to the URL before matching and saving    |
+|`normalize_body`|`nil`                           |Proc applied to the request body before saving        |
+
+Additional headers can be filtered by appending to the array:
+
+```crystal
+c.filter_headers << "X-Custom-Key"
+```
 
 
 ### Record modes
@@ -217,6 +228,66 @@ sequenceDiagram
     D-->>W: stored body string
     W-->>T: IO::Memory (no network call)
 ```
+
+### Request normalization
+
+LLM requests often contain volatile fields that change between runs: user IDs,
+session tokens embedded in URLs, timestamps in request bodies. These prevent
+transcripts from matching reliably across machines and CI runs. Normalization
+lets you strip or transform those values before matching and saving, without
+affecting the real outbound request.
+
+#### URL normalization
+
+Use this to scrub API keys or session tokens embedded in the URL path or query
+string:
+
+```crystal
+Wiretap.configure do |c|
+  # Redact API keys in the path
+  c.normalize_url = ->(url : String) { url.gsub(/sk-[a-z0-9]+/, "[FILTERED]") }
+
+  # Redact tokens in query strings
+  c.normalize_url = ->(url : String) { url.gsub(/token=[^&]+/, "token=[FILTERED]") }
+end
+```
+
+#### Body normalization
+
+Use this to strip non-deterministic fields from JSON request bodies:
+
+```crystal
+Wiretap.configure do |c|
+  c.normalize_body = ->(body : String) {
+    parsed = JSON.parse(body).as_h
+    parsed.delete("user")       # remove volatile user ID
+    parsed.delete("request_id") # remove per-call UUID
+    parsed.to_json
+  }
+end
+```
+
+The normalization proc receives the raw body string and must return a string.
+The real outbound request body is unaffected — only the stored and matched
+value is transformed.
+
+#### What normalization affects
+
+```mermaid
+flowchart LR
+    A[Incoming request] --> B[normalize_url]
+    A --> C[normalize_body]
+    B --> D[Transcript matching]
+    C --> D
+    B --> E[Transcript storage]
+    C --> E
+    A -->|unchanged| F[Real outbound request]
+```
+
+> **CAVEAT: Body normalization currently affects storage only.** Matching is on method and
+> normalized URL. If you need multiple interactions to the same endpoint with
+> different bodies, see the body-digest matching feature planned for a future
+> release.
 
 
 ### Using with Spectator
