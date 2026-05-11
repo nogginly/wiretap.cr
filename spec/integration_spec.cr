@@ -293,4 +293,44 @@ describe "Wiretap integration" do
       end
     end
   end
+  describe "request normalization" do
+    it "strips volatile body fields before saving to the transcript" do
+      Wiretap.configure do |c|
+        c.normalize_body = ->(body : String) {
+          parsed = JSON.parse(body).as_h
+          parsed.delete("user")
+          parsed.to_json
+        }
+      end
+
+      Wiretap.intercept("body_norm_record", mode: :once) do
+        HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"test","user":"user_abc123_20250510T120000Z"})
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("body_norm_record", :once)
+      stored_body = t.interactions.first.request.body
+      stored_body.should_not be_nil
+      stored_body.not_nil!.should eq(%({"model":"test"}))
+      stored_body.not_nil!.should_not contain("user")
+    end
+
+    it "normalizes the URL before saving to the transcript" do
+      Wiretap.configure do |c|
+        c.normalize_url = ->(url : String) { url.gsub(/token=[^&]+/, "token=[FILTERED]") }
+      end
+
+      Wiretap.intercept("url_norm_record", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/status?token=secret123")
+      end
+
+      t = Wiretap::Transcript.load_or_create("url_norm_record", :once)
+      stored_url = t.interactions.first.request.url
+      stored_url.should contain("[FILTERED]")
+      stored_url.should_not contain("secret123")
+    end
+  end
 end

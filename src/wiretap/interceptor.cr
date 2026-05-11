@@ -67,8 +67,9 @@ module Wiretap
     # ---------------------------------------------------------------------------
 
     private def self.replay_or_raise(transcript : Transcript, method : String, url : String) : HTTP::Client::Response
-      interaction = transcript.find_interaction(method, url)
-      raise Wiretap::Error.new("No recorded interaction for #{method} #{url}") unless interaction
+      normalized = Wiretap.config.apply_url_normalization(url)
+      interaction = transcript.find_interaction(method, normalized)
+      raise Wiretap::Error.new("No recorded interaction for #{method} #{normalized}") unless interaction
       build_response(interaction.response.status, interaction.response.headers, interaction.response.body)
     end
 
@@ -83,11 +84,14 @@ module Wiretap
       raw = real_request.call
       body = raw.body
 
+      normalized_url = Wiretap.config.apply_url_normalization(url)
+      normalized_body = req_body ? Wiretap.config.apply_body_normalization(req_body) : nil
+
       req_data = RequestData.new(
         method: request.method,
-        url: url,
+        url: normalized_url,
         headers: filter_headers(request.headers),
-        body: req_body
+        body: normalized_body
       )
       resp_data = ResponseData.new(
         status: raw.status.code,
@@ -119,8 +123,9 @@ module Wiretap
       url : String,
       user_block : HTTP::Client::Response ->,
     ) : Nil
-      interaction = transcript.find_interaction(method, url)
-      raise Wiretap::Error.new("No recorded interaction for #{method} #{url}") unless interaction
+      normalized = Wiretap.config.apply_url_normalization(url)
+      interaction = transcript.find_interaction(method, normalized)
+      raise Wiretap::Error.new("No recorded interaction for #{method} #{normalized}") unless interaction
 
       h = HTTP::Headers.new
       interaction.response.headers.each { |k, v| h[k] = v }
@@ -141,11 +146,14 @@ module Wiretap
       real_request.call(->(response : HTTP::Client::Response) {
         body = response.body_io.gets_to_end
 
+        normalized_url = Wiretap.config.apply_url_normalization(url)
+        normalized_body = req_body ? Wiretap.config.apply_body_normalization(req_body) : nil
+
         req_data = RequestData.new(
           method: request.method,
-          url: url,
+          url: normalized_url,
           headers: filter_headers(request.headers),
-          body: req_body
+          body: normalized_body
         )
         resp_data = ResponseData.new(
           status: response.status.code,
