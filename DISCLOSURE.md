@@ -1,17 +1,11 @@
-# AI Usage Disclosure for Wiretap.cr
+# Disclosures for Wiretap
 
-This shard is part of my experimentation with using an LLM to build small, well-defined libraries _that I understand as if I wrote it myself_ for use by my otherwise hand-written applications.
+## AI Usage
+
+This project is an example of my selective use of LLMs to build small, well-defined, and useful libraries and tools _that I understand as if I wrote them myself_.
+
+### Level 5
 
 The "[Using AI to Contribute to Open Source](https://www.visidata.org/blog/2026/ai/)" article provides an excellent framework for identifying how AI is used.
 
-Based on that, `wiretap.cr` is _by design_ a **[Level 5](https://www.visidata.org/blog/2026/ai/#level-5%3A-bots-coded%2C-human-understands-completely)** project.
-
-> DETAILS TODO
-
-## Approach
-
-> TODO
-
-## Opening prompt
-
-> TODO
+This is _by design_ a **[Level 5](https://www.visidata.org/blog/2026/ai/#level-5%3A-bots-coded%2C-human-understands-completely)** project.
