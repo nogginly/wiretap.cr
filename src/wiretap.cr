@@ -1,4 +1,5 @@
 require "json"
+require "digest/sha256"
 require "http/client"
 
 require "./wiretap/error"

@@ -333,4 +333,52 @@ describe "Wiretap integration" do
       stored_url.should_not contain("secret123")
     end
   end
+
+  describe "same-name transcript with different bodies" do
+    it "records and replays two distinct interactions by body digest" do
+      # Both requests POST to the same endpoint under the same transcript name.
+      # Without digest matching they would collide; with it each gets its own
+      # recorded interaction.
+      Wiretap.intercept("shared_chat", mode: :once) do
+        HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"fast","messages":[]})
+        )
+        HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"slow","messages":[]})
+        )
+      end
+
+      # Transcript holds two distinct interactions.
+      t = Wiretap::Transcript.load_or_create("shared_chat", :once)
+      t.interactions.size.should eq(2)
+
+      test_server.reset_counts
+
+      # Replay — each request finds its own interaction by digest.
+      responses = [] of HTTP::Client::Response
+      Wiretap.intercept("shared_chat", mode: :once) do
+        responses << HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"fast","messages":[]})
+        )
+        responses << HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"slow","messages":[]})
+        )
+      end
+
+      # Server was not called during replay.
+      test_server.request_counts.fetch("/chat", 0).should eq(0)
+
+      # Both responses replayed correctly.
+      responses.size.should eq(2)
+      responses.all? { |r| r.status.code == 201 }.should be_true
+    end
+  end
 end

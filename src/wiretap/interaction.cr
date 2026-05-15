@@ -8,11 +8,18 @@ module Wiretap
     property headers : Hash(String, String)
     property body : String?
 
+    # SHA256 hex digest of the normalized body. Nil for bodyless requests
+    # (GET, HEAD, etc.) and for transcripts recorded before digest matching
+    # was introduced. When nil on either side of a match, digest is ignored
+    # and matching falls back to method + URL only.
+    property body_digest : String?
+
     def initialize(
       @method : String,
       @url : String,
       @headers : Hash(String, String),
       @body : String? = nil,
+      @body_digest : String? = nil,
     )
     end
   end

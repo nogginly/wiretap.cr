@@ -12,14 +12,20 @@ module Wiretap
     ) : HTTP::Client::Response
       url = build_url(client, request)
 
+      # Compute digest from the normalized body upfront so both the replay
+      # lookup and the record path use the same value.
+      raw_body = peek_body(request)
+      normalized_body = raw_body ? Wiretap.config.apply_body_normalization(raw_body) : nil
+      body_digest = compute_body_digest(normalized_body)
+
       case transcript.mode
       when :none
-        replay_or_raise(transcript, request.method, url)
+        replay_or_raise(transcript, request.method, url, body_digest)
       when :always
         record_and_return(transcript, request, url, real_request)
       when :once
         if transcript.loaded?
-          replay_or_raise(transcript, request.method, url)
+          replay_or_raise(transcript, request.method, url, body_digest)
         else
           record_and_return(transcript, request, url, real_request)
         end
@@ -46,14 +52,18 @@ module Wiretap
     ) : Nil
       url = build_url(client, request)
 
+      raw_body = peek_body(request)
+      normalized_body = raw_body ? Wiretap.config.apply_body_normalization(raw_body) : nil
+      body_digest = compute_body_digest(normalized_body)
+
       case transcript.mode
       when :none
-        replay_streaming_or_raise(transcript, request.method, url, user_block)
+        replay_streaming_or_raise(transcript, request.method, url, body_digest, user_block)
       when :always
         record_and_stream(transcript, request, url, user_block, real_request)
       when :once
         if transcript.loaded?
-          replay_streaming_or_raise(transcript, request.method, url, user_block)
+          replay_streaming_or_raise(transcript, request.method, url, body_digest, user_block)
         else
           record_and_stream(transcript, request, url, user_block, real_request)
         end
@@ -66,9 +76,9 @@ module Wiretap
     # Non-streaming private helpers
     # ---------------------------------------------------------------------------
 
-    private def self.replay_or_raise(transcript : Transcript, method : String, url : String) : HTTP::Client::Response
+    private def self.replay_or_raise(transcript : Transcript, method : String, url : String, body_digest : String?) : HTTP::Client::Response
       normalized = Wiretap.config.apply_url_normalization(url)
-      interaction = transcript.find_interaction(method, normalized)
+      interaction = transcript.find_interaction(method, normalized, body_digest)
       raise Wiretap::Error.new("No recorded interaction for #{method} #{normalized}") unless interaction
       build_response(interaction.response.status, interaction.response.headers, interaction.response.body)
     end
@@ -86,12 +96,14 @@ module Wiretap
 
       normalized_url = Wiretap.config.apply_url_normalization(url)
       normalized_body = req_body ? Wiretap.config.apply_body_normalization(req_body) : nil
+      body_digest = compute_body_digest(normalized_body)
 
       req_data = RequestData.new(
         method: request.method,
         url: normalized_url,
         headers: filter_headers(request.headers),
-        body: normalized_body
+        body: normalized_body,
+        body_digest: body_digest
       )
       resp_data = ResponseData.new(
         status: raw.status.code,
@@ -121,10 +133,11 @@ module Wiretap
       transcript : Transcript,
       method : String,
       url : String,
+      body_digest : String?,
       user_block : HTTP::Client::Response ->,
     ) : Nil
       normalized = Wiretap.config.apply_url_normalization(url)
-      interaction = transcript.find_interaction(method, normalized)
+      interaction = transcript.find_interaction(method, normalized, body_digest)
       raise Wiretap::Error.new("No recorded interaction for #{method} #{normalized}") unless interaction
 
       h = HTTP::Headers.new
@@ -148,12 +161,14 @@ module Wiretap
 
         normalized_url = Wiretap.config.apply_url_normalization(url)
         normalized_body = req_body ? Wiretap.config.apply_body_normalization(req_body) : nil
+        body_digest = compute_body_digest(normalized_body)
 
         req_data = RequestData.new(
           method: request.method,
           url: normalized_url,
           headers: filter_headers(request.headers),
-          body: normalized_body
+          body: normalized_body,
+          body_digest: body_digest
         )
         resp_data = ResponseData.new(
           status: response.status.code,
@@ -181,6 +196,17 @@ module Wiretap
       "#{scheme}://#{host}#{port_suffix}#{request.resource}"
     end
 
+    # Reads the body without consuming it — leaves the request intact for
+    # the real outbound call. Returns nil for bodyless requests.
+    private def self.peek_body(request : HTTP::Request) : String?
+      body_io = request.body
+      return nil unless body_io
+      content = body_io.gets_to_end
+      return nil if content.empty?
+      request.body = content
+      content
+    end
+
     private def self.read_and_reset_body(request : HTTP::Request) : String?
       body_io = request.body
       return nil unless body_io
@@ -190,6 +216,12 @@ module Wiretap
 
       request.body = content
       content
+    end
+
+    # Returns SHA256 hex digest of the given string, or nil for nil/empty input.
+    private def self.compute_body_digest(body : String?) : String?
+      return nil if body.nil? || body.empty?
+      Digest::SHA256.hexdigest(body)
     end
 
     private def self.filter_headers(headers : HTTP::Headers) : Hash(String, String)

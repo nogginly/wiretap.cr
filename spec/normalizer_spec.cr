@@ -113,4 +113,57 @@ describe "Wiretap request normalization" do
       Wiretap.config.apply_body_normalization(body).should eq(%({"model":"test"}))
     end
   end
+  describe "body digest matching" do
+    it "computes a stable digest for the same body" do
+      digest1 = Digest::SHA256.hexdigest(%({"model":"test"}))
+      digest2 = Digest::SHA256.hexdigest(%({"model":"test"}))
+      digest1.should eq(digest2)
+    end
+
+    it "produces different digests for different bodies" do
+      digest1 = Digest::SHA256.hexdigest(%({"model":"fast"}))
+      digest2 = Digest::SHA256.hexdigest(%({"model":"slow"}))
+      digest1.should_not eq(digest2)
+    end
+
+    it "find_interaction matches by digest when both sides have one" do
+      t = Wiretap::Transcript.load_or_create("digest_match", :once)
+
+      body_a = %({"model":"fast"})
+      body_b = %({"model":"slow"})
+
+      t.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("POST", "https://api.example.com/v1/chat",
+          {} of String => String, body_a, Digest::SHA256.hexdigest(body_a)),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"reply":"fast"}))
+      ))
+      t.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("POST", "https://api.example.com/v1/chat",
+          {} of String => String, body_b, Digest::SHA256.hexdigest(body_b)),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"reply":"slow"}))
+      ))
+
+      found_a = t.find_interaction("POST", "https://api.example.com/v1/chat",
+        Digest::SHA256.hexdigest(body_a))
+      found_b = t.find_interaction("POST", "https://api.example.com/v1/chat",
+        Digest::SHA256.hexdigest(body_b))
+
+      found_a.not_nil!.response.body.should eq(%({"reply":"fast"}))
+      found_b.not_nil!.response.body.should eq(%({"reply":"slow"}))
+    end
+
+    it "matches GET requests on method + URL only (no body, no digest)" do
+      t = Wiretap::Transcript.load_or_create("digest_get", :once)
+
+      t.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("GET", "https://api.example.com/v1/status",
+          {} of String => String, nil, nil),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"ok":true}))
+      ))
+
+      found = t.find_interaction("GET", "https://api.example.com/v1/status")
+      found.should_not be_nil
+      found.not_nil!.response.body.should eq(%({"ok":true}))
+    end
+  end
 end

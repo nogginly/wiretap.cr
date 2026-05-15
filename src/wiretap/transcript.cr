@@ -51,9 +51,14 @@ module Wiretap
       end
     end
 
-    # Finds the first interaction matching method + url, or nil.
-    def find_interaction(method : String, url : String) : Interaction?
-      @interactions.find { |i| i.request.method == method && i.request.url == url }
+    # Finds the first interaction matching method + url + body_digest.
+    # When body_digest is nil (bodyless requests such as GET), matching
+    # is on method + URL only.
+    def find_interaction(method : String, url : String, body_digest : String? = nil) : Interaction?
+      @interactions.find do |i|
+        next false unless i.request.method == method && i.request.url == url
+        body_digest.nil? ? true : i.request.body_digest == body_digest
+      end
     end
 
     # Appends an interaction and marks the transcript as needing a save.
