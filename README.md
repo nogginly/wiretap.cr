@@ -349,8 +349,15 @@ A transcript is a plain JSON file you can read, edit, and commit:
 }
 ```
 
-To update a transcript, delete the file and run the test once with network
-access, or set `mode: :always` for that block temporarily.
+A transcript file accumulates interactions over time. When a new interaction
+is saved, Wiretap merges it into the existing file rather than overwriting.
+Interactions already present (matched by method, URL, and body digest) are
+never duplicated.
+
+To update a specific interaction, delete the file and run the relevant test
+once with network access, or set `mode: :always` for that block temporarily.
+To re-record everything, delete all transcript files and run the full suite.
+
 
 ### Recommended CI setup
 

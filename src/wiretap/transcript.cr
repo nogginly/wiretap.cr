@@ -68,7 +68,22 @@ module Wiretap
 
     def save : Nil
       Dir.mkdir_p(File.dirname(@path))
-      body = Body.new(@name, @recorded_with, @interactions)
+
+      existing = if File.exists?(@path)
+                   Body.from_json(File.read(@path)).interactions
+                 else
+                   [] of Interaction
+                 end
+
+      merged = existing + @interactions.reject do |new_i|
+        existing.any? do |e|
+          e.request.method == new_i.request.method &&
+            e.request.url == new_i.request.url &&
+            e.request.body_digest == new_i.request.body_digest
+        end
+      end
+
+      body = Body.new(@name, @recorded_with, merged)
       File.write(@path, body.to_pretty_json)
     end
   end

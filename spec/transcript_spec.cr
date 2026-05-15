@@ -101,6 +101,52 @@ describe Wiretap::Transcript do
       path = File.join(Wiretap.config.transcript_dir, "deep_save.json")
       File.exists?(path).should be_true
     end
+
+    it "merges new interactions into an existing transcript on save" do
+      t1 = Wiretap::Transcript.load_or_create("merge_test", :once)
+      t1.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("POST", "https://api.example.com/chat",
+          {} of String => String, %({"model":"fast"}), Digest::SHA256.hexdigest(%({"model":"fast"}))),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"reply":"fast"}))
+      ))
+      t1.save
+
+      # Second save — different body, should append not overwrite.
+      t2 = Wiretap::Transcript.load_or_create("merge_test", :once)
+      t2.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("POST", "https://api.example.com/chat",
+          {} of String => String, %({"model":"slow"}), Digest::SHA256.hexdigest(%({"model":"slow"}))),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"reply":"slow"}))
+      ))
+      t2.save
+
+      reloaded = Wiretap::Transcript.load_or_create("merge_test", :once)
+      reloaded.interactions.size.should eq(2)
+      reloaded.interactions.map(&.response.body).should contain(%({"reply":"fast"}))
+      reloaded.interactions.map(&.response.body).should contain(%({"reply":"slow"}))
+    end
+
+    it "does not duplicate an interaction already present in the transcript" do
+      t1 = Wiretap::Transcript.load_or_create("dedup_test", :once)
+      t1.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("GET", "https://api.example.com/status",
+          {} of String => String, nil, nil),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"ok":true}))
+      ))
+      t1.save
+
+      # Save the same interaction again.
+      t2 = Wiretap::Transcript.load_or_create("dedup_test", :once)
+      t2.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("GET", "https://api.example.com/status",
+          {} of String => String, nil, nil),
+        Wiretap::ResponseData.new(200, {} of String => String, %({"ok":true}))
+      ))
+      t2.save
+
+      reloaded = Wiretap::Transcript.load_or_create("dedup_test", :once)
+      reloaded.interactions.size.should eq(1)
+    end
   end
 
   describe "#dirty?" do
