@@ -1,9 +1,6 @@
 module Wiretap
+  # :nodoc:
   module Interceptor
-    # ---------------------------------------------------------------------------
-    # Non-streaming entry point
-    # ---------------------------------------------------------------------------
-
     def self.handle(
       transcript : Transcript,
       client : HTTP::Client,
@@ -12,8 +9,6 @@ module Wiretap
     ) : HTTP::Client::Response
       url = build_url(client, request)
 
-      # Compute digest from the normalized body upfront so both the replay
-      # lookup and the record path use the same value.
       raw_body = peek_body(request)
       normalized_body = raw_body ? Wiretap.config.apply_body_normalization(raw_body) : nil
       body_digest = compute_body_digest(normalized_body)
@@ -33,15 +28,6 @@ module Wiretap
         real_request.call
       end
     end
-
-    # ---------------------------------------------------------------------------
-    # Streaming entry point
-    #
-    # user_block   — the block the caller passed to HTTP::Client#exec; receives
-    #                the (possibly replayed) response and reads body_io from it.
-    # &real_request — a block that accepts an inner Proc and runs `previous_def`
-    #                 with it, yielding the live response to that proc.
-    # ---------------------------------------------------------------------------
 
     def self.handle_streaming(
       transcript : Transcript,
@@ -71,10 +57,6 @@ module Wiretap
         real_request.call(user_block)
       end
     end
-
-    # ---------------------------------------------------------------------------
-    # Non-streaming private helpers
-    # ---------------------------------------------------------------------------
 
     private def self.replay_or_raise(transcript : Transcript, method : String, url : String, body_digest : String?) : HTTP::Client::Response
       normalized = Wiretap.config.apply_url_normalization(url)
@@ -124,10 +106,6 @@ module Wiretap
       headers.each { |k, v| h[k] = v }
       HTTP::Client::Response.new(status, body: body, headers: h)
     end
-
-    # ---------------------------------------------------------------------------
-    # Streaming private helpers
-    # ---------------------------------------------------------------------------
 
     private def self.replay_streaming_or_raise(
       transcript : Transcript,
@@ -183,10 +161,6 @@ module Wiretap
       })
     end
 
-    # ---------------------------------------------------------------------------
-    # Shared private helpers
-    # ---------------------------------------------------------------------------
-
     private def self.build_url(client : HTTP::Client, request : HTTP::Request) : String
       scheme = client.tls? ? "https" : "http"
       host = client.host
@@ -196,8 +170,6 @@ module Wiretap
       "#{scheme}://#{host}#{port_suffix}#{request.resource}"
     end
 
-    # Reads the body without consuming it — leaves the request intact for
-    # the real outbound call. Returns nil for bodyless requests.
     private def self.peek_body(request : HTTP::Request) : String?
       body_io = request.body
       return nil unless body_io
@@ -210,15 +182,12 @@ module Wiretap
     private def self.read_and_reset_body(request : HTTP::Request) : String?
       body_io = request.body
       return nil unless body_io
-
       content = body_io.gets_to_end
       return nil if content.empty?
-
       request.body = content
       content
     end
 
-    # Returns SHA256 hex digest of the given string, or nil for nil/empty input.
     private def self.compute_body_digest(body : String?) : String?
       return nil if body.nil? || body.empty?
       Digest::SHA256.hexdigest(body)
@@ -241,12 +210,8 @@ module Wiretap
   end
 end
 
-# ---------------------------------------------------------------------------
-# HTTP::Client reopen
-# ---------------------------------------------------------------------------
-
+# :nodoc:
 class HTTP::Client
-  # Non-streaming — fully buffers response body.
   def exec(request : HTTP::Request) : HTTP::Client::Response
     if transcript = Wiretap.active_transcript
       Wiretap::Interceptor.handle(transcript, self, request) { previous_def }
@@ -255,9 +220,6 @@ class HTTP::Client
     end
   end
 
-  # Streaming — buffers body_io for recording, replays via IO::Memory.
-  # The caller's block receives a response and reads body_io from it,
-  # exactly as it would from a live connection.
   def exec(request : HTTP::Request, &block : HTTP::Client::Response ->)
     if transcript = Wiretap.active_transcript
       Wiretap::Interceptor.handle_streaming(transcript, self, request, block) do |inner|

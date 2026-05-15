@@ -1,5 +1,5 @@
 module Wiretap
-  # The recorded outgoing request.
+  # :nodoc:
   class RequestData
     include JSON::Serializable
 
@@ -7,11 +7,6 @@ module Wiretap
     property url : String
     property headers : Hash(String, String)
     property body : String?
-
-    # SHA256 hex digest of the normalized body. Nil for bodyless requests
-    # (GET, HEAD, etc.) and for transcripts recorded before digest matching
-    # was introduced. When nil on either side of a match, digest is ignored
-    # and matching falls back to method + URL only.
     property body_digest : String?
 
     def initialize(
@@ -24,7 +19,7 @@ module Wiretap
     end
   end
 
-  # The recorded incoming response.
+  # :nodoc:
   class ResponseData
     include JSON::Serializable
 
@@ -40,7 +35,7 @@ module Wiretap
     end
   end
 
-  # A matched request/response pair — one entry in a transcript.
+  # :nodoc:
   class Interaction
     include JSON::Serializable
 

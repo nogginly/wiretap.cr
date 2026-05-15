@@ -1,7 +1,6 @@
 module Wiretap
+  # :nodoc:
   class Transcript
-    # Serializable envelope — the only thing written to/read from disk.
-    # Kept private so callers interact with Transcript directly.
     private struct Body
       include JSON::Serializable
 
@@ -18,11 +17,10 @@ module Wiretap
     getter interactions : Array(Interaction)
 
     @dirty : Bool
-    @loaded : Bool # true if the transcript file existed on disk at load time
+    @loaded : Bool
     @path : String
     @recorded_with : String
 
-    # Private — callers use .load_or_create.
     private def initialize(
       @name : String,
       @mode : Symbol,
@@ -34,9 +32,6 @@ module Wiretap
       @dirty = false
     end
 
-    # Loads an existing transcript from disk, or creates a fresh one.
-    # When mode is :always the existing file is ignored and a fresh
-    # transcript is returned — this is the "re-record everything" semantic.
     def self.load_or_create(name : String, mode : Symbol) : Transcript
       path = File.join(Wiretap.config.transcript_dir, "#{name}.json")
 
@@ -51,9 +46,6 @@ module Wiretap
       end
     end
 
-    # Finds the first interaction matching method + url + body_digest.
-    # When body_digest is nil (bodyless requests such as GET), matching
-    # is on method + URL only.
     def find_interaction(method : String, url : String, body_digest : String? = nil) : Interaction?
       @interactions.find do |i|
         next false unless i.request.method == method && i.request.url == url
@@ -61,26 +53,19 @@ module Wiretap
       end
     end
 
-    # Appends an interaction and marks the transcript as needing a save.
     def record(interaction : Interaction) : Nil
       @interactions << interaction
       @dirty = true
     end
 
-    # True when at least one interaction has been recorded since load.
     def dirty? : Bool
       @dirty
     end
 
-    # True when this transcript was loaded from an existing file on disk.
-    # Used by the interceptor to distinguish a first recording run from
-    # subsequent replay-only runs under :once mode.
     def loaded? : Bool
       @loaded
     end
 
-    # Persists the transcript to disk as pretty-printed JSON.
-    # Creates intermediate directories if they do not exist.
     def save : Nil
       Dir.mkdir_p(File.dirname(@path))
       body = Body.new(@name, @recorded_with, @interactions)
