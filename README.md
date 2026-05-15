@@ -57,7 +57,7 @@ sequenceDiagram
     W->>W: transcript found
     W->>C: exec(request)
     C->>W: intercepted
-    W->>D: find_interaction(method, url)
+    W->>D: find_interaction(method, url, digest)
     D-->>W: recorded response
     W-->>C: replayed response
     C-->>T: response (no network call)
@@ -153,6 +153,10 @@ it "returns a chat completion" do
 end
 ```
 
+Multiple calls to the same endpoint with different bodies can share a
+transcript name. Wiretap keys each interaction by a SHA256 digest of the
+normalized body, so they coexist without collision.
+
 #### Testing error responses
 
 ```crystal
@@ -203,8 +207,6 @@ The transcript stores the full SSE body as a single string - chunk boundaries
 are preserved in the content, so `each_line` iteration works identically during
 replay.
 
-**Streaming diagram**
-
 ```mermaid
 sequenceDiagram
     participant T as Test code
@@ -224,10 +226,11 @@ sequenceDiagram
 
     Note over W,D: Subsequent runs - replay
     T->>W: intercept("name") do ... end
-    W->>D: find_interaction(method, url)
+    W->>D: find_interaction(method, url, digest)
     D-->>W: stored body string
     W-->>T: IO::Memory (no network call)
 ```
+
 
 ### Request normalization
 
@@ -254,7 +257,8 @@ end
 
 #### Body normalization
 
-Use this to strip non-deterministic fields from JSON request bodies:
+Use this to strip non-deterministic fields from JSON request bodies before
+they are saved and hashed for matching:
 
 ```crystal
 Wiretap.configure do |c|
@@ -268,26 +272,20 @@ end
 ```
 
 The normalization proc receives the raw body string and must return a string.
-The real outbound request body is unaffected — only the stored and matched
+The real outbound request body is unaffected - only the stored and matched
 value is transformed.
-
-#### What normalization affects
 
 ```mermaid
 flowchart LR
     A[Incoming request] --> B[normalize_url]
     A --> C[normalize_body]
-    B --> D[Transcript matching]
+    B --> D[SHA256 digest]
     C --> D
-    B --> E[Transcript storage]
-    C --> E
-    A -->|unchanged| F[Real outbound request]
+    D --> E[Transcript matching]
+    B --> F[Transcript storage]
+    C --> F
+    A -->|unchanged| G[Real outbound request]
 ```
-
-> **CAVEAT: Body normalization currently affects storage only.** Matching is on method and
-> normalized URL. If you need multiple interactions to the same endpoint with
-> different bodies, see the body-digest matching feature planned for a future
-> release.
 
 
 ### Using with Spectator
@@ -325,7 +323,7 @@ A transcript is a plain JSON file you can read, edit, and commit:
 ```json
 {
   "name": "chat_completion",
-  "recorded_with": "wiretap/0.1.0",
+  "recorded_with": "wiretap/0.2.0",
   "interactions": [
     {
       "request": {
@@ -335,7 +333,8 @@ A transcript is a plain JSON file you can read, edit, and commit:
           "Authorization": "[FILTERED]",
           "Content-Type": "application/json"
         },
-        "body": "{\"model\":\"my-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+        "body": "{\"model\":\"my-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}",
+        "body_digest": "a1b2c3d4e5f6..."
       },
       "response": {
         "status": 200,
@@ -352,7 +351,6 @@ A transcript is a plain JSON file you can read, edit, and commit:
 
 To update a transcript, delete the file and run the test once with network
 access, or set `mode: :always` for that block temporarily.
-
 
 ### Recommended CI setup
 
