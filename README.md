@@ -12,7 +12,7 @@ See [DISCLOSURE](DISCLOSURE.md) for how I used AI for this project.
 
    ```yaml
    development_dependencies:
-      termify:
+      wiretap:
         github: nogginly/wiretap.cr
    ```
 
