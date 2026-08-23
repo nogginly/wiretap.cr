@@ -56,11 +56,17 @@ module Wiretap
     # ```
     property normalize_url : Proc(String, String)? = nil
 
-    # Optional proc applied to the request body before it is hashed and saved.
+    # Optional proc applied to the request body before it is hashed for
+    # matching.
     #
     # Use this to strip non-deterministic fields (timestamps, user IDs, UUIDs)
-    # so transcripts remain stable across machines and CI runs. The real
-    # outbound request body is unaffected.
+    # so requests still match across machines and CI runs despite those
+    # fields changing on every call. This affects matching only: the real
+    # outbound request body is unaffected, and the body saved to the
+    # transcript is the raw, un-normalized body actually sent. If you need to
+    # redact sensitive fields from the saved transcript itself, that is a
+    # separate concern from matching (see `filter_headers` for the header
+    # equivalent).
     #
     # ```
     # c.normalize_body = ->(body : String) {

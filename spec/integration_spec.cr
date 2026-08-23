@@ -294,7 +294,7 @@ describe "Wiretap integration" do
     end
   end
   describe "request normalization" do
-    it "strips volatile body fields before saving to the transcript" do
+    it "stores the raw body as sent, even when normalize_body is configured" do
       Wiretap.configure do |c|
         c.normalize_body = ->(body : String) {
           parsed = JSON.parse(body).as_h
@@ -303,7 +303,32 @@ describe "Wiretap integration" do
         }
       end
 
+      raw_body = %({"model":"test","user":"user_abc123_20250510T120000Z"})
+
       Wiretap.intercept("body_norm_record", mode: :once) do
+        HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: raw_body
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("body_norm_record", :once)
+      stored_body = t.interactions.first.request.body
+      stored_body.should_not be_nil
+      stored_body.not_nil!.should eq(raw_body)
+    end
+
+    it "digests the normalized body while storing the raw one, so replay still matches" do
+      Wiretap.configure do |c|
+        c.normalize_body = ->(body : String) {
+          parsed = JSON.parse(body).as_h
+          parsed.delete("user")
+          parsed.to_json
+        }
+      end
+
+      Wiretap.intercept("body_norm_replay", mode: :once) do
         HTTP::Client.post(
           "#{test_server.base_url}/chat",
           headers: HTTP::Headers{"Content-Type" => "application/json"},
@@ -311,11 +336,21 @@ describe "Wiretap integration" do
         )
       end
 
-      t = Wiretap::Transcript.load_or_create("body_norm_record", :once)
-      stored_body = t.interactions.first.request.body
-      stored_body.should_not be_nil
-      stored_body.not_nil!.should eq(%({"model":"test"}))
-      stored_body.not_nil!.should_not contain("user")
+      # A second call with a different volatile "user" field, but the same
+      # normalized shape, should still replay the same recorded interaction
+      # rather than hitting the real server and recording a second one.
+      response = uninitialized HTTP::Client::Response
+      Wiretap.intercept("body_norm_replay", mode: :once) do
+        response = HTTP::Client.post(
+          "#{test_server.base_url}/chat",
+          headers: HTTP::Headers{"Content-Type" => "application/json"},
+          body: %({"model":"test","user":"user_zzz999_20990101T000000Z"})
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("body_norm_replay", :once)
+      t.interactions.size.should eq(1)
+      response.status.code.should eq(201)
     end
 
     it "normalizes the URL before saving to the transcript" do

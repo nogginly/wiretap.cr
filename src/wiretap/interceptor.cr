@@ -61,8 +61,24 @@ module Wiretap
     private def self.replay_or_raise(transcript : Transcript, method : String, url : String, body_digest : String?) : HTTP::Client::Response
       normalized = Wiretap.config.apply_url_normalization(url)
       interaction = transcript.find_interaction(method, normalized, body_digest)
-      raise Wiretap::Error.new("No recorded interaction for #{method} #{normalized}") unless interaction
+      raise Wiretap::Error.new(miss_message(transcript, method, normalized, body_digest)) unless interaction
       build_response(interaction.response.status, interaction.response.headers, interaction.response.body)
+    end
+
+    # Builds a diagnostic message for a replay miss.
+    #
+    # Distinguishes "nothing shares this method and URL" from "something
+    # does, but the request body digest differs" — the latter is the far
+    # more common and more confusing case in practice.
+    private def self.miss_message(transcript : Transcript, method : String, url : String, body_digest : String?) : String
+      base = "No recorded interaction for #{method} #{url}"
+      return base if body_digest.nil?
+
+      candidates = transcript.matching_method_and_url(method, url)
+      return base if candidates.empty?
+
+      noun = candidates.size == 1 ? "interaction" : "interactions"
+      "#{base} — #{candidates.size} #{noun} matched method and URL but the request body digest differed"
     end
 
     private def self.record_and_return(
@@ -84,7 +100,7 @@ module Wiretap
         method: request.method,
         url: normalized_url,
         headers: filter_headers(request.headers),
-        body: normalized_body,
+        body: req_body,
         body_digest: body_digest
       )
       resp_data = ResponseData.new(
@@ -116,7 +132,7 @@ module Wiretap
     ) : Nil
       normalized = Wiretap.config.apply_url_normalization(url)
       interaction = transcript.find_interaction(method, normalized, body_digest)
-      raise Wiretap::Error.new("No recorded interaction for #{method} #{normalized}") unless interaction
+      raise Wiretap::Error.new(miss_message(transcript, method, normalized, body_digest)) unless interaction
 
       h = HTTP::Headers.new
       interaction.response.headers.each { |k, v| h[k] = v }
@@ -145,7 +161,7 @@ module Wiretap
           method: request.method,
           url: normalized_url,
           headers: filter_headers(request.headers),
-          body: normalized_body,
+          body: req_body,
           body_digest: body_digest
         )
         resp_data = ResponseData.new(

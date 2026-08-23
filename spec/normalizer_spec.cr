@@ -95,12 +95,15 @@ describe "Wiretap request normalization" do
   end
 
   describe "body normalization applied during intercept" do
-    # Body normalization affects storage only — find_interaction matches on
-    # method + URL. The value is that volatile fields (timestamps, user IDs)
-    # are stripped from the saved transcript, keeping it stable across runs.
-    # The recording-side verification (confirming the stored body is clean)
-    # lives in integration_spec.cr where a live server is available.
-    it "applies the body proc when normalizing for storage" do
+    # Body normalization affects matching only — the saved transcript stores
+    # the raw, un-normalized body actually sent. The value of normalize_body
+    # is that volatile fields (timestamps, user IDs) are ignored when
+    # computing the match digest, so replay is stable across runs even
+    # though the recorded body is not touched. The recording-side
+    # verification (confirming the stored body is the raw one, and that
+    # digest-based replay still matches) lives in integration_spec.cr where
+    # a live server is available.
+    it "applies the body proc when computing the match digest" do
       Wiretap.configure do |c|
         c.normalize_body = ->(body : String) {
           parsed = JSON.parse(body).as_h

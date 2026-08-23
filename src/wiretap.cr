@@ -25,6 +25,11 @@ require "./wiretap/interceptor"
 # Wiretap.configure do |c|
 #   c.record_mode = ENV["CI"]? ? :none : :once
 # end
+#
+# # Fails the run if any transcript was recorded rather than replayed —
+# # catches a missing or newly-required transcript silently re-recording
+# # under :once instead of failing loudly the way :none would.
+# Spec.after_suite { Wiretap.verify! }
 # ```
 #
 # ```
@@ -76,6 +81,62 @@ module Wiretap
   # slate between examples.
   def self.reset_config : Nil
     @@config = Config.new
+  end
+
+  # ---------------------------------------------------------------------------
+  # Recorded-interaction tracking
+  # ---------------------------------------------------------------------------
+
+  @@recorded_count = Atomic(Int32).new(0)
+
+  # :nodoc:
+  def self.note_recorded_interaction : Nil
+    @@recorded_count.add(1)
+  end
+
+  # The number of interactions recorded (not replayed) since the last
+  # `reset_recording_count!`.
+  #
+  # Under `:once`, a missing or newly-required transcript is recorded rather
+  # than failed, so a passing suite does not by itself mean anything
+  # replayed. This is the count `verify!` checks.
+  def self.recorded_count : Int32
+    @@recorded_count.get
+  end
+
+  # Resets `recorded_count` to zero.
+  #
+  # Call this at the start of a run (e.g. `Spec.before_suite`) if a previous
+  # run in the same process may have recorded interactions and you want
+  # `verify!` to judge only what happened since.
+  def self.reset_recording_count! : Nil
+    @@recorded_count.set(0)
+  end
+
+  # Raises `Wiretap::Error` if any interaction was recorded, rather than
+  # replayed, since the last `reset_recording_count!`.
+  #
+  # A suite running under `:once` passes whether it replayed from disk or
+  # quietly re-recorded against the real network — the assertions can't
+  # tell the difference, because a re-recorded transcript is by
+  # construction consistent with the response it just captured. `verify!`
+  # makes that distinction visible:
+  #
+  # ```
+  # Spec.after_suite { Wiretap.verify! }
+  # ```
+  #
+  # Placed in CI, this fails the build the moment a transcript goes missing
+  # or a new interaction is required, instead of leaving a suite that has
+  # silently stopped testing anything against a recorded baseline.
+  def self.verify! : Nil
+    count = recorded_count
+    return if count.zero?
+
+    noun = count == 1 ? "interaction was" : "interactions were"
+    raise Wiretap::Error.new(
+      "#{count} #{noun} recorded rather than replayed during this run"
+    )
   end
 
   # ---------------------------------------------------------------------------

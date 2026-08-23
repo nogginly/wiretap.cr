@@ -80,13 +80,13 @@ Wiretap.configure do |c|
 end
 ```
 
-|Setting         |Default                         |Purpose                                               |
-|----------------|--------------------------------|------------------------------------------------------|
-|`transcript_dir`|`"spec/transcripts"`            |Where transcript JSON files are stored                |
-|`record_mode`   |`:once`                         |Default record mode for all `intercept` blocks        |
-|`filter_headers`|`["Authorization", "X-Api-Key"]`|Header values replaced with `[FILTERED]` before saving|
-|`normalize_url` |`nil`                           |Proc applied to the URL before matching and saving    |
-|`normalize_body`|`nil`                           |Proc applied to the request body before saving        |
+Setting         |Default                         |Purpose                                               
+----------------|--------------------------------|------------------------------------------------------
+`transcript_dir`|`"spec/transcripts"`            |Where transcript JSON files are stored                
+`record_mode`   |`:once`                         |Default record mode for all `intercept` blocks        
+`filter_headers`|`["Authorization", "X-Api-Key"]`|Header values replaced with `[FILTERED]` before saving
+`normalize_url` |`nil`                           |Proc applied to the URL before matching and saving    
+`normalize_body`|`nil`                           |Proc applied to the request body before matching      
 
 Additional headers can be filtered by appending to the array:
 
@@ -97,11 +97,11 @@ c.filter_headers << "X-Custom-Key"
 
 ### Record modes
 
-|Mode     |Behaviour                                                      |
-|---------|---------------------------------------------------------------|
-|`:once`  |Record if no transcript exists; strict replay if one does.     |
-|`:always`|Always re-record, discarding any existing transcript.          |
-|`:none`  |Strict replay only. Raise on any request not in the transcript.|
+Mode     |Behaviour                                                      
+---------|---------------------------------------------------------------
+`:once`  |Record if no transcript exists; strict replay if one does.     
+`:always`|Always re-record, discarding any existing transcript.          
+`:none`  |Strict replay only. Raise on any request not in the transcript.
 
 The default is `:once`. Override per block when needed:
 
@@ -110,6 +110,11 @@ Wiretap.intercept("my_test", mode: :none) do
   # ...
 end
 ```
+
+When a request doesn't match anything in the transcript, the error tells you
+whether nothing shares its method and URL, or whether a recorded interaction
+matched those but had a different request body - the latter is the more
+common case and usually means a normalized field changed.
 
 
 ### Basic usage
@@ -258,22 +263,25 @@ end
 #### Body normalization
 
 Use this to strip non-deterministic fields from JSON request bodies before
-they are saved and hashed for matching:
+they are hashed for matching:
 
 ```crystal
 Wiretap.configure do |c|
   c.normalize_body = ->(body : String) {
     parsed = JSON.parse(body).as_h
-    parsed.delete("user")       # remove volatile user ID
-    parsed.delete("request_id") # remove per-call UUID
+    parsed.delete("user")       # ignore volatile user ID when matching
+    parsed.delete("request_id") # ignore per-call UUID when matching
     parsed.to_json
   }
 end
 ```
 
 The normalization proc receives the raw body string and must return a string.
-The real outbound request body is unaffected - only the stored and matched
-value is transformed.
+It affects matching only - the real outbound request body is unaffected, and
+the body saved to the transcript is always the exact, un-normalized body that
+was sent. If you also need to redact sensitive fields from the saved
+transcript itself, do that separately (see `filter_headers` for the header
+equivalent); `normalize_body` is a matching hook, not a redaction hook.
 
 ```mermaid
 flowchart LR
@@ -283,8 +291,8 @@ flowchart LR
     C --> D
     D --> E[Transcript matching]
     B --> F[Transcript storage]
-    C --> F
     A -->|unchanged| G[Real outbound request]
+    A -->|raw body| F
 ```
 
 
@@ -323,7 +331,7 @@ A transcript is a plain JSON file you can read, edit, and commit:
 ```json
 {
   "name": "chat_completion",
-  "recorded_with": "wiretap/0.2.0",
+  "recorded_with": "wiretap/0.4.0",
   "interactions": [
     {
       "request": {
@@ -349,6 +357,10 @@ A transcript is a plain JSON file you can read, edit, and commit:
 }
 ```
 
+The request `body` is always the exact body that was sent over the wire,
+even if `normalize_body` is configured - normalization affects matching
+only, never what gets written to disk.
+
 A transcript file accumulates interactions over time. When a new interaction
 is saved, Wiretap merges it into the existing file rather than overwriting.
 Interactions already present (matched by method, URL, and body digest) are
@@ -373,6 +385,17 @@ end
 This uses `:once` locally (recording new transcripts as you write tests)
 and `:none` in CI (failing loudly if a transcript is missing, which means
 a test was added without a recorded transcript).
+
+`:none` catches a *missing* transcript, but not a transcript that exists and
+is silently extended - under `:once`, a transcript missing just one new
+interaction will record it and pass, without telling you the test never
+replayed anything. `Wiretap.verify!` catches that case: it raises if any
+interaction was recorded (rather than replayed) since the last reset, so
+you can assert your local run replayed cleanly, not just that it passed.
+
+```crystal
+Spec.after_suite { Wiretap.verify! }
+```
 
 ## Development
 
