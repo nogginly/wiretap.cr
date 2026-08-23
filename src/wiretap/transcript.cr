@@ -53,6 +53,14 @@ module Wiretap
       end
     end
 
+    # Interactions that match on method and URL alone, ignoring body digest.
+    #
+    # Used to classify a replay miss: a non-empty result means the request
+    # was recorded, but with a different body.
+    def matching_method_and_url(method : String, url : String) : Array(Interaction)
+      @interactions.select { |i| i.request.method == method && i.request.url == url }
+    end
+
     def record(interaction : Interaction) : Nil
       @interactions << interaction
       @dirty = true

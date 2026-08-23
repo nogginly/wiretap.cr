@@ -88,6 +88,64 @@ describe "Wiretap.intercept" do
         end
       end
     end
+
+    it "does not mention body digest when nothing shares the method and URL" do
+      seed_transcript("strict_no_match", "GET", "https://example.com/known", 200, "{}")
+
+      expect_raises(Wiretap::Error, /^No recorded interaction for GET https:\/\/example\.com\/unknown$/) do
+        Wiretap.intercept("strict_no_match", mode: :none) do
+          HTTP::Client.get("https://example.com/unknown")
+        end
+      end
+    end
+
+    it "names the digest mismatch when method and URL match but the body differs" do
+      seed_transcript(
+        "strict_digest_mismatch", "POST", "https://api.example.com/v1/messages",
+        200, %({"ok":true}), request_body: %({"id":"mc_1787427226104_0"})
+      )
+
+      expect_raises(Wiretap::Error, /1 interaction matched method and URL but the request body digest differed/) do
+        Wiretap.intercept("strict_digest_mismatch", mode: :none) do
+          HTTP::Client.post(
+            "https://api.example.com/v1/messages",
+            body: %({"id":"mc_1787427999999_0"})
+          )
+        end
+      end
+    end
+
+    it "pluralizes the count when multiple interactions match method and URL" do
+      dir = current_dir[0]
+      Dir.mkdir_p(dir)
+      path = File.join(dir, "strict_digest_mismatch_multi.json")
+      interactions = ["aaa", "bbb"].map do |body|
+        Wiretap::Interaction.new(
+          Wiretap::RequestData.new("POST", "https://api.example.com/v1/messages", {} of String => String, body, Digest::SHA256.hexdigest(body)),
+          Wiretap::ResponseData.new(200, {} of String => String, %({"ok":true}))
+        )
+      end
+      File.write(path, {name: "strict_digest_mismatch_multi", recorded_with: "wiretap/test", interactions: interactions}.to_pretty_json)
+
+      expect_raises(Wiretap::Error, /2 interactions matched method and URL but the request body digest differed/) do
+        Wiretap.intercept("strict_digest_mismatch_multi", mode: :none) do
+          HTTP::Client.post("https://api.example.com/v1/messages", body: "ccc")
+        end
+      end
+    end
+
+    it "does not mention digest for a bodyless request even if the URL is recorded with a body" do
+      seed_transcript(
+        "strict_bodyless_miss", "POST", "https://api.example.com/v1/messages",
+        200, %({"ok":true}), request_body: %({"id":"1"})
+      )
+
+      expect_raises(Wiretap::Error, /^No recorded interaction for GET https:\/\/api\.example\.com\/v1\/messages$/) do
+        Wiretap.intercept("strict_bodyless_miss", mode: :none) do
+          HTTP::Client.get("https://api.example.com/v1/messages")
+        end
+      end
+    end
   end
 
   describe ":once mode — replay from existing transcript" do

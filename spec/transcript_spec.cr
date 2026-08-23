@@ -72,6 +72,33 @@ describe Wiretap::Transcript do
     end
   end
 
+  describe "#matching_method_and_url" do
+    it "returns interactions that share method and url regardless of body digest" do
+      t = Wiretap::Transcript.load_or_create("near_miss_test", :once)
+      t.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("POST", "https://api.example.com/v1/chat", {} of String => String, "a", "digest-a"),
+        Wiretap::ResponseData.new(200, {} of String => String, "ok")
+      ))
+      t.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("POST", "https://api.example.com/v1/chat", {} of String => String, "b", "digest-b"),
+        Wiretap::ResponseData.new(200, {} of String => String, "ok")
+      ))
+
+      matches = t.matching_method_and_url("POST", "https://api.example.com/v1/chat")
+      matches.size.should eq(2)
+    end
+
+    it "is empty when method and url do not match anything" do
+      t = Wiretap::Transcript.load_or_create("near_miss_empty", :once)
+      t.record(Wiretap::Interaction.new(
+        Wiretap::RequestData.new("GET", "https://api.example.com/v1/chat", {} of String => String),
+        Wiretap::ResponseData.new(200, {} of String => String, "ok")
+      ))
+
+      t.matching_method_and_url("POST", "https://other.example.com/").should be_empty
+    end
+  end
+
   describe "#save" do
     it "writes a parseable JSON file to transcript_dir" do
       t = Wiretap::Transcript.load_or_create("save_test", :once)
