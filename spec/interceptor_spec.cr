@@ -12,31 +12,6 @@ require "./spec_helper"
 # local HTTP server) are left for a future spec file.
 # ---------------------------------------------------------------------------
 
-# Top-level helper — seeds a transcript JSON file and returns its path.
-# Must live outside describe blocks; Crystal forbids dynamic def declarations.
-def seed_transcript(
-  name : String,
-  method : String,
-  url : String,
-  status : Int32,
-  response_body : String,
-  request_body : String? = nil,
-) : String
-  dir = Wiretap.config.transcript_dir
-  Dir.mkdir_p(dir)
-
-  body_digest = request_body ? Digest::SHA256.hexdigest(request_body) : nil
-
-  interaction = Wiretap::Interaction.new(
-    Wiretap::RequestData.new(method, url, {} of String => String, request_body, body_digest),
-    Wiretap::ResponseData.new(status, {"Content-Type" => "application/json"}, response_body)
-  )
-  envelope = {name: name, recorded_with: "wiretap/test", interactions: [interaction]}
-  path = File.join(dir, "#{name}.json")
-  File.write(path, envelope.to_pretty_json)
-  path
-end
-
 describe "Wiretap.intercept" do
   current_dir = [""]
 
