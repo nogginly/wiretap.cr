@@ -100,7 +100,7 @@ module Wiretap
         method: request.method,
         url: normalized_url,
         headers: filter_headers(request.headers),
-        body: normalized_body,
+        body: req_body,
         body_digest: body_digest
       )
       resp_data = ResponseData.new(
@@ -161,7 +161,7 @@ module Wiretap
           method: request.method,
           url: normalized_url,
           headers: filter_headers(request.headers),
-          body: normalized_body,
+          body: req_body,
           body_digest: body_digest
         )
         resp_data = ResponseData.new(
