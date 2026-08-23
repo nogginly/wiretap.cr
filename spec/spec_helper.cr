@@ -2,9 +2,12 @@ require "spec"
 require "file_utils"
 require "../src/wiretap"
 
-# Reset Wiretap config before every example so tests are independent.
+# Reset Wiretap config and recording state before every example so tests
+# are independent — other spec files record interactions too, and
+# recorded_count is process-global.
 Spec.before_each do
   Wiretap.reset_config
+  Wiretap.reset_recording_count!
 end
 
 # Wipe any active transcript that a failed test may have left behind.

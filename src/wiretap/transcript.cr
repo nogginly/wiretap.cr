@@ -64,6 +64,7 @@ module Wiretap
     def record(interaction : Interaction) : Nil
       @interactions << interaction
       @dirty = true
+      Wiretap.note_recorded_interaction
     end
 
     def dirty? : Bool
