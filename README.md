@@ -80,13 +80,13 @@ Wiretap.configure do |c|
 end
 ```
 
-Setting         |Default                         |Purpose                                               
-----------------|--------------------------------|------------------------------------------------------
-`transcript_dir`|`"spec/transcripts"`            |Where transcript JSON files are stored                
-`record_mode`   |`:once`                         |Default record mode for all `intercept` blocks        
-`filter_headers`|`["Authorization", "X-Api-Key"]`|Header values replaced with `[FILTERED]` before saving
-`normalize_url` |`nil`                           |Proc applied to the URL before matching and saving    
-`normalize_body`|`nil`                           |Proc applied to the request body before matching      
+Setting         |Default                                                      |Purpose                                               
+----------------|-------------------------------------------------------------|------------------------------------------------------
+`transcript_dir`|`"spec/transcripts"`                                         |Where transcript JSON files are stored                
+`record_mode`   |`:once`                                                      |Default record mode for all `intercept` blocks        
+`filter_headers`|`["Authorization", "X-Api-Key", "X-Goog-Api-Key", "Api-Key"]`|Header values replaced with `[FILTERED]` before saving
+`normalize_url` |`nil`                                                        |Proc applied to the URL before matching and saving    
+`normalize_body`|`nil`                                                        |Proc applied to the request body before matching      
 
 Additional headers can be filtered by appending to the array:
 

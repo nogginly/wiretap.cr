@@ -14,6 +14,11 @@ describe Wiretap::Config do
       Wiretap.config.filter_headers.should contain("Authorization")
       Wiretap.config.filter_headers.should contain("X-Api-Key")
     end
+
+    it "filters well-known non-standard LLM/cloud API key headers by default" do
+      Wiretap.config.filter_headers.should contain("X-Goog-Api-Key")
+      Wiretap.config.filter_headers.should contain("Api-Key")
+    end
   end
 
   describe "Wiretap.configure" do
