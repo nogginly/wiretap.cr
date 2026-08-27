@@ -237,6 +237,46 @@ describe "Wiretap integration" do
       stored = t.interactions.first.request.headers["Authorization"]?
       stored.should eq("[FILTERED]")
     end
+
+    it "does not write X-Goog-Api-Key values to the transcript" do
+      Wiretap.intercept("google_header_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"X-Goog-Api-Key" => "goog_super_secret"}
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("google_header_test", :once)
+      stored = t.interactions.first.request.headers["X-Goog-Api-Key"]?
+      stored.should eq("[FILTERED]")
+    end
+
+    it "does not write Api-Key values to the transcript" do
+      Wiretap.intercept("azure_header_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"Api-Key" => "azure_super_secret"}
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("azure_header_test", :once)
+      stored = t.interactions.first.request.headers["Api-Key"]?
+      stored.should eq("[FILTERED]")
+    end
+
+    it "filters by header name case-insensitively" do
+      Wiretap.intercept("case_insensitive_header_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"x-goog-api-key" => "goog_super_secret"}
+        )
+      end
+
+      t = Wiretap::Transcript.load_or_create("case_insensitive_header_test", :once)
+      stored = t.interactions.first.request.headers.find { |k, _| k.downcase == "x-goog-api-key" }
+      stored.should_not be_nil
+      stored.not_nil![1].should eq("[FILTERED]")
+    end
   end
 
   describe "streaming (SSE) — record and replay" do

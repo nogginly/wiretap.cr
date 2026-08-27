@@ -35,8 +35,11 @@ module Wiretap
     # Header names whose values are replaced with `"[FILTERED]"` before the
     # interaction is saved to disk.
     #
-    # Matching is case-insensitive. Defaults to `["Authorization", "X-Api-Key"]`.
-    # Append additional names as needed:
+    # Matching is case-insensitive. Defaults to `["Authorization", "X-Api-Key",
+    # "X-Goog-Api-Key", "Api-Key"]` - covering the common `Authorization:
+    # Bearer` pattern plus the non-standard auth headers used by Anthropic /
+    # most LLM APIs (`X-Api-Key`), Google Gemini (`X-Goog-Api-Key`), and Azure
+    # OpenAI (`Api-Key`). Append additional names as needed:
     #
     # ```
     # c.filter_headers << "X-Session-Token"
@@ -44,7 +47,7 @@ module Wiretap
     #
     # To replace the list entirely use `filter_headers.replace(...)`, though
     # this discards the defaults and should be done deliberately.
-    getter filter_headers : Array(String) = ["Authorization", "X-Api-Key"]
+    getter filter_headers : Array(String) = ["Authorization", "X-Api-Key", "X-Goog-Api-Key", "Api-Key"]
 
     # Optional proc applied to the request URL before matching and saving.
     #
