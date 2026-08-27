@@ -19,6 +19,14 @@ describe Wiretap::Config do
       Wiretap.config.filter_headers.should contain("X-Goog-Api-Key")
       Wiretap.config.filter_headers.should contain("Api-Key")
     end
+
+    it "has no headers ignored for the suspected-secret warning by default" do
+      Wiretap.config.ignore_suspected_secrets.should be_empty
+    end
+
+    it "sets a default on_suspected_secret proc" do
+      Wiretap.config.on_suspected_secret.should_not be_nil
+    end
   end
 
   describe "Wiretap.configure" do
@@ -38,6 +46,27 @@ describe Wiretap::Config do
       end
 
       Wiretap.config.filter_headers.should contain("X-Custom-Secret")
+    end
+
+    it "allows on_suspected_secret to be overridden" do
+      called_with = [] of {String, String}
+      Wiretap.configure do |c|
+        c.on_suspected_secret = ->(name : String, value : String) {
+          called_with << {name, value}
+          nil
+        }
+      end
+
+      Wiretap.config.on_suspected_secret.call("X-Secret", "value")
+      called_with.should eq([{"X-Secret", "value"}])
+    end
+
+    it "allows headers to be exempted from the suspected-secret warning" do
+      Wiretap.configure do |c|
+        c.ignore_suspected_secrets << "X-Idempotency-Key"
+      end
+
+      Wiretap.config.ignore_suspected_secrets.should contain("X-Idempotency-Key")
     end
   end
 

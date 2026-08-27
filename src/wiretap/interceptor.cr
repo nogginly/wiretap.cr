@@ -211,9 +211,19 @@ module Wiretap
 
     private def self.filter_headers(headers : HTTP::Headers) : Hash(String, String)
       filter_list = Wiretap.config.filter_headers.map(&.downcase)
+      ignore_list = Wiretap.config.ignore_suspected_secrets.map(&.downcase)
       result = {} of String => String
       headers.each do |name, values|
-        result[name] = filter_list.includes?(name.downcase) ? "[FILTERED]" : values.join(", ")
+        if filter_list.includes?(name.downcase)
+          result[name] = "[FILTERED]"
+          next
+        end
+
+        value = values.join(", ")
+        if !ignore_list.includes?(name.downcase) && SecretHeuristic.suspicious?(name, value)
+          Wiretap.config.on_suspected_secret.call(name, value)
+        end
+        result[name] = value
       end
       result
     end

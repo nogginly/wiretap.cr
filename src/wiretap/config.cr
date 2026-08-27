@@ -49,6 +49,52 @@ module Wiretap
     # this discards the defaults and should be done deliberately.
     getter filter_headers : Array(String) = ["Authorization", "X-Api-Key", "X-Goog-Api-Key", "Api-Key"]
 
+    # Header names to exempt from the suspected-secret warning (see
+    # `on_suspected_secret`), even though their value looks like it could be
+    # a credential.
+    #
+    # Use this for headers you've verified are safe - a randomly-generated
+    # idempotency key or trace ID, for example - rather than silencing the
+    # warning globally.
+    #
+    # ```
+    # c.ignore_suspected_secrets << "X-Idempotency-Key"
+    # ```
+    property ignore_suspected_secrets : Array(String) = [] of String
+
+    # Called when a header that is not in `filter_headers` has a value that
+    # looks like it could be a credential (a known API key format, or a
+    # long, high-entropy value on a header named like "key", "token",
+    # "secret" or "auth"). Receives the header name and its unfiltered
+    # value.
+    #
+    # This is a warning, not a filter - the header is still saved as-is.
+    # Defaults to printing a warning to `STDERR`. Two ways to act on it:
+    #
+    # - If it's a real credential, add the header name to `filter_headers`
+    #   so it's redacted (this also stops the warning, since filtered
+    #   headers are never checked).
+    # - If it's a false positive, add the header name to
+    #   `ignore_suspected_secrets` to silence just that header.
+    #
+    # Override the proc itself to change how the warning is delivered, e.g.
+    # to raise instead of printing:
+    #
+    # ```
+    # c.on_suspected_secret = ->(name : String, value : String) {
+    #   raise "Unfiltered header '#{name}' looks like a secret" if ENV["CI"]?
+    # }
+    # ```
+    property on_suspected_secret : Proc(String, String, Nil) = ->(name : String, value : String) {
+      STDERR.puts(
+        "[wiretap] Warning: header '#{name}' looks like it may contain a " \
+        "secret but is not in filter_headers, so it will be saved as-is. " \
+        "Add it to filter_headers to redact it, or to " \
+        "ignore_suspected_secrets to silence this warning."
+      )
+      nil
+    }
+
     # Optional proc applied to the request URL before matching and saving.
     #
     # Use this to scrub API keys or session tokens embedded in the URL path
