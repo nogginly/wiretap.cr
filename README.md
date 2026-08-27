@@ -80,18 +80,53 @@ Wiretap.configure do |c|
 end
 ```
 
-Setting         |Default                                                      |Purpose                                               
-----------------|-------------------------------------------------------------|------------------------------------------------------
-`transcript_dir`|`"spec/transcripts"`                                         |Where transcript JSON files are stored                
-`record_mode`   |`:once`                                                      |Default record mode for all `intercept` blocks        
-`filter_headers`|`["Authorization", "X-Api-Key", "X-Goog-Api-Key", "Api-Key"]`|Header values replaced with `[FILTERED]` before saving
-`normalize_url` |`nil`                                                        |Proc applied to the URL before matching and saving    
-`normalize_body`|`nil`                                                        |Proc applied to the request body before matching      
+Setting                   |Default                                                      |Purpose                                                       
+--------------------------|-------------------------------------------------------------|--------------------------------------------------------------
+`transcript_dir`          |`"spec/transcripts"`                                         |Where transcript JSON files are stored                        
+`record_mode`             |`:once`                                                      |Default record mode for all `intercept` blocks                
+`filter_headers`          |`["Authorization", "X-Api-Key", "X-Goog-Api-Key", "Api-Key"]`|Header values replaced with `[FILTERED]` before saving        
+`ignore_suspected_secrets`|`[]`                                                         |Headers exempted from the suspected-secret warning below      
+`on_suspected_secret`     |prints to `STDERR`                                           |Called when an unfiltered header value looks like a credential
+`normalize_url`           |`nil`                                                        |Proc applied to the URL before matching and saving            
+`normalize_body`          |`nil`                                                        |Proc applied to the request body before matching              
 
 Additional headers can be filtered by appending to the array:
 
 ```crystal
 c.filter_headers << "X-Custom-Key"
+```
+
+#### Suspected-secret warning
+
+Wiretap's header filtering only redacts headers you've told it about. As a
+safety net, any header *not* in `filter_headers` whose value looks like it
+could be a credential (a recognized API key format, or a long, high-entropy
+value on a header named like "key", "token", "secret", or "auth") prints a
+warning to `STDERR` instead of failing silently into a committed transcript:
+
+```
+[wiretap] Warning: header 'X-Custom-Auth' looks like it may contain a
+secret but is not in filter_headers, so it will be saved as-is. Add it to
+filter_headers to redact it, or to ignore_suspected_secrets to silence this
+warning.
+```
+
+This is a heuristic, not a filter - it can both miss real credentials and
+flag values that aren't secrets. If the warning fires on a real credential,
+add the header to `filter_headers`. If it's a false positive (a randomly
+generated idempotency key, for example), exempt just that header:
+
+```crystal
+c.ignore_suspected_secrets << "X-Idempotency-Key"
+```
+
+To change how the warning is delivered - for example, to fail CI instead of
+printing - override the proc:
+
+```crystal
+c.on_suspected_secret = ->(name : String, value : String) {
+  raise "Unfiltered header '#{name}' looks like a secret" if ENV["CI"]?
+}
 ```
 
 

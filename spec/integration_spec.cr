@@ -279,6 +279,89 @@ describe "Wiretap integration" do
     end
   end
 
+  describe "suspected-secret warning" do
+    it "calls on_suspected_secret for an unfiltered header with a credential-shaped value" do
+      calls = [] of {String, String}
+      Wiretap.configure do |c|
+        c.on_suspected_secret = ->(name : String, value : String) {
+          calls << {name, value}
+          nil
+        }
+      end
+
+      Wiretap.intercept("suspected_secret_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"X-Custom-Secret" => "aZ8mK2pQ9xR4vN7wL1jY6tH3cF5b"}
+        )
+      end
+
+      calls.should eq([{"X-Custom-Secret", "aZ8mK2pQ9xR4vN7wL1jY6tH3cF5b"}])
+
+      # It's a warning only - the header is still saved as-is, not redacted.
+      t = Wiretap::Transcript.load_or_create("suspected_secret_test", :once)
+      t.interactions.first.request.headers["X-Custom-Secret"].should eq("aZ8mK2pQ9xR4vN7wL1jY6tH3cF5b")
+    end
+
+    it "does not call on_suspected_secret for a header already in filter_headers" do
+      calls = [] of {String, String}
+      Wiretap.configure do |c|
+        c.on_suspected_secret = ->(name : String, value : String) {
+          calls << {name, value}
+          nil
+        }
+      end
+
+      Wiretap.intercept("filtered_not_warned_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"Authorization" => "Bearer aZ8mK2pQ9xR4vN7wL1jY6tH3cF5b"}
+        )
+      end
+
+      calls.should be_empty
+    end
+
+    it "does not call on_suspected_secret for a header in ignore_suspected_secrets" do
+      calls = [] of {String, String}
+      Wiretap.configure do |c|
+        c.ignore_suspected_secrets << "X-Custom-Secret"
+        c.on_suspected_secret = ->(name : String, value : String) {
+          calls << {name, value}
+          nil
+        }
+      end
+
+      Wiretap.intercept("ignored_secret_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"X-Custom-Secret" => "aZ8mK2pQ9xR4vN7wL1jY6tH3cF5b"}
+        )
+      end
+
+      calls.should be_empty
+    end
+
+    it "does not call on_suspected_secret for an ordinary header" do
+      calls = [] of {String, String}
+      Wiretap.configure do |c|
+        c.on_suspected_secret = ->(name : String, value : String) {
+          calls << {name, value}
+          nil
+        }
+      end
+
+      Wiretap.intercept("ordinary_header_test", mode: :once) do
+        HTTP::Client.get(
+          "#{test_server.base_url}/status",
+          HTTP::Headers{"Content-Type" => "application/json"}
+        )
+      end
+
+      calls.should be_empty
+    end
+  end
+
   describe "streaming (SSE) — record and replay" do
     it "records a streaming response and saves the body to the transcript" do
       Wiretap.intercept("stream_record", mode: :once) do

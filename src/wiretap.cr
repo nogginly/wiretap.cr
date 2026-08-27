@@ -4,6 +4,7 @@ require "http/client"
 
 require "./wiretap/error"
 require "./wiretap/config"
+require "./wiretap/secret_heuristic"
 require "./wiretap/interaction"
 require "./wiretap/transcript"
 require "./wiretap/interceptor"
