@@ -15,6 +15,7 @@ jobs:
           - { os: ubuntu-latest, crystal: "1.20" }
           - { os: ubuntu-24.04-arm, crystal: "1.21" }
           - { os: macos-latest, crystal: "1.22" }
+          - { os: windows-2025, crystal: "1.20" }
 
     runs-on: ${{ matrix.os }}
 
@@ -45,7 +46,6 @@ jobs:
       # ---- Run tests on all Unix platforms
 
       - name: Run tests (Unix)
-        if: ${{ runner.os != 'Windows' }}
         run: crystal spec --order random
 
       # ---- Source lint and formatting check on Ubuntu / x86 only
