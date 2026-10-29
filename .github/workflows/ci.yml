@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, crystal: "1.20" }
+          - { os: ubuntu-24.04-arm, crystal: "1.21" }
+          - { os: macos-latest, crystal: "1.22" }
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Force apt update (Linux only)
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo -n apt-get update
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{matrix.crystal}}
+
+      - name: Cache shards
+        uses: actions/cache@v5
+        with:
+          path: |
+            lib
+            bin/ameba*
+          key: ${{ matrix.os }}-crystal-${{matrix.crystal}}-shards-${{ hashFiles('**/shard.lock') }}
+
+      - name: Install shards
+        run: shards check || shards install
+
+      # ---- Run tests on all Unix platforms
+
+      - name: Setup debug environment (Unix)
+        if: ${{ runner.os != 'Windows' }}
+        run: mkdir -p bin/debug
+
+      - name: Build Debug (Unix)
+        if: ${{ runner.os != 'Windows' }}
+        run: SHARDS_BIN_PATH=bin/debug shards build --debug
+
+      - name: Run tests (Unix)
+        if: ${{ runner.os != 'Windows' }}
+        run: crystal spec --order random
+
+      # ---- Source lint and formatting check on Ubuntu / x86 only
+
+      - name: Check formatting (Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: crystal tool format; git diff --exit-code src
+
+      - name: Build ameba  (Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: cp lib/ameba/bin/ameba.cr bin && crystal build -o bin/ameba bin/ameba.cr
+
+      - name: Run static code analysis (Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: bin/ameba src/
+
+      # ---- Build and run samples
+
+      # - name: Setup release environment
+      #   if: ${{ runner.os != 'Windows' }}
+      #   run: mkdir -p bin/release
+
+      # - name: Build Release
+      #   if: ${{ runner.os != 'Windows' }}
+      #   run: SHARDS_BIN_PATH=bin/release shards --production build --release
+
+      # - name: Run test script runner
+      #   if: ${{ runner.os != 'Windows' }}
+      #   run: bin/release/test_runner
