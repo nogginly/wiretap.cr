@@ -1,5 +1,4 @@
 require "./spec_helper"
-require "http/server"
 
 # ---------------------------------------------------------------------------
 # These specs do NOT make real network calls.

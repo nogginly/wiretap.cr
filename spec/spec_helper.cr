@@ -1,6 +1,8 @@
 require "spec"
 require "file_utils"
+require "http/server"
 require "../src/wiretap"
+require "./support/*"
 
 # Reset Wiretap config and recording state before every example so tests
 # are independent — other spec files record interactions too, and
