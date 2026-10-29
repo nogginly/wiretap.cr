@@ -188,24 +188,24 @@ module Wiretap
 
     private def self.peek_body(request : HTTP::Request) : String?
       body_io = request.body
-      return nil unless body_io
+      return unless body_io
       content = body_io.gets_to_end
-      return nil if content.empty?
+      return if content.empty?
       request.body = content
       content
     end
 
     private def self.read_and_reset_body(request : HTTP::Request) : String?
       body_io = request.body
-      return nil unless body_io
+      return unless body_io
       content = body_io.gets_to_end
-      return nil if content.empty?
+      return if content.empty?
       request.body = content
       content
     end
 
     private def self.compute_body_digest(body : String?) : String?
-      return nil if body.nil? || body.empty?
+      return if body.nil? || body.empty?
       Digest::SHA256.hexdigest(body)
     end
 
