@@ -43,9 +43,9 @@ jobs:
       - name: Install shards
         run: shards check || shards install
 
-      # ---- Run tests on all Unix platforms
+      # ---- Run tests on all platforms
 
-      - name: Run tests (Unix)
+      - name: Run tests
         run: crystal spec --order random
 
       # ---- Source lint and formatting check on Ubuntu / x86 only
