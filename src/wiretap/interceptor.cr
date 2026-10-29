@@ -9,7 +9,7 @@ module Wiretap
     ) : HTTP::Client::Response
       url = build_url(client, request)
 
-      raw_body = peek_body(request)
+      raw_body = buffer_body(request)
       normalized_body = raw_body ? Wiretap.config.apply_body_normalization(raw_body) : nil
       body_digest = compute_body_digest(normalized_body)
 
@@ -17,12 +17,12 @@ module Wiretap
       when :none
         replay_or_raise(transcript, request.method, url, body_digest)
       when :always
-        record_and_return(transcript, request, url, real_request)
+        record_and_return(transcript, request, url, raw_body, body_digest, real_request)
       when :once
         if transcript.loaded?
           replay_or_raise(transcript, request.method, url, body_digest)
         else
-          record_and_return(transcript, request, url, real_request)
+          record_and_return(transcript, request, url, raw_body, body_digest, real_request)
         end
       else
         real_request.call
@@ -38,7 +38,7 @@ module Wiretap
     ) : Nil
       url = build_url(client, request)
 
-      raw_body = peek_body(request)
+      raw_body = buffer_body(request)
       normalized_body = raw_body ? Wiretap.config.apply_body_normalization(raw_body) : nil
       body_digest = compute_body_digest(normalized_body)
 
@@ -46,12 +46,12 @@ module Wiretap
       when :none
         replay_streaming_or_raise(transcript, request.method, url, body_digest, user_block)
       when :always
-        record_and_stream(transcript, request, url, user_block, real_request)
+        record_and_stream(transcript, request, url, raw_body, body_digest, user_block, real_request)
       when :once
         if transcript.loaded?
           replay_streaming_or_raise(transcript, request.method, url, body_digest, user_block)
         else
-          record_and_stream(transcript, request, url, user_block, real_request)
+          record_and_stream(transcript, request, url, raw_body, body_digest, user_block, real_request)
         end
       else
         real_request.call(user_block)
@@ -85,16 +85,14 @@ module Wiretap
       transcript : Transcript,
       request : HTTP::Request,
       url : String,
+      req_body : String?,
+      body_digest : String?,
       real_request : -> HTTP::Client::Response,
     ) : HTTP::Client::Response
-      req_body = read_and_reset_body(request)
-
       raw = real_request.call
       body = raw.body
 
       normalized_url = Wiretap.config.apply_url_normalization(url)
-      normalized_body = req_body ? Wiretap.config.apply_body_normalization(req_body) : nil
-      body_digest = compute_body_digest(normalized_body)
 
       req_data = RequestData.new(
         method: request.method,
@@ -145,17 +143,15 @@ module Wiretap
       transcript : Transcript,
       request : HTTP::Request,
       url : String,
+      req_body : String?,
+      body_digest : String?,
       user_block : HTTP::Client::Response ->,
       real_request : (HTTP::Client::Response ->) ->,
     ) : Nil
-      req_body = read_and_reset_body(request)
-
       real_request.call(->(response : HTTP::Client::Response) {
         body = response.body_io.gets_to_end
 
         normalized_url = Wiretap.config.apply_url_normalization(url)
-        normalized_body = req_body ? Wiretap.config.apply_body_normalization(req_body) : nil
-        body_digest = compute_body_digest(normalized_body)
 
         req_data = RequestData.new(
           method: request.method,
@@ -186,16 +182,10 @@ module Wiretap
       "#{scheme}://#{host}#{port_suffix}#{request.resource}"
     end
 
-    private def self.peek_body(request : HTTP::Request) : String?
-      body_io = request.body
-      return unless body_io
-      content = body_io.gets_to_end
-      return if content.empty?
-      request.body = content
-      content
-    end
-
-    private def self.read_and_reset_body(request : HTTP::Request) : String?
+    # Reads the request body into a string and replaces it with a rewindable
+    # copy so the real request can still send it. Returns nil when there is
+    # no body or it is empty.
+    private def self.buffer_body(request : HTTP::Request) : String?
       body_io = request.body
       return unless body_io
       content = body_io.gets_to_end
