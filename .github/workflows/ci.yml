@@ -44,19 +44,15 @@ jobs:
 
       # ---- Run tests on all Unix platforms
 
-      - name: Setup debug environment (Unix)
-        if: ${{ runner.os != 'Windows' }}
-        run: mkdir -p bin/debug
-
-      - name: Build Debug (Unix)
-        if: ${{ runner.os != 'Windows' }}
-        run: SHARDS_BIN_PATH=bin/debug shards build --debug
-
       - name: Run tests (Unix)
         if: ${{ runner.os != 'Windows' }}
         run: crystal spec --order random
 
       # ---- Source lint and formatting check on Ubuntu / x86 only
+
+      - name: Setup debug environment (Unix)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: mkdir -p bin/debug
 
       - name: Check formatting (Linux)
         if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -69,17 +65,3 @@ jobs:
       - name: Run static code analysis (Linux)
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: bin/ameba src/
-
-      # ---- Build and run samples
-
-      # - name: Setup release environment
-      #   if: ${{ runner.os != 'Windows' }}
-      #   run: mkdir -p bin/release
-
-      # - name: Build Release
-      #   if: ${{ runner.os != 'Windows' }}
-      #   run: SHARDS_BIN_PATH=bin/release shards --production build --release
-
-      # - name: Run test script runner
-      #   if: ${{ runner.os != 'Windows' }}
-      #   run: bin/release/test_runner
