@@ -1,13 +1,11 @@
 dependencies:
-  brew:
-    - crystal
   custom:
     - |
       shards check || \
-        shards install && \
+        (shards install && \
         mkdir -p bin && \
         cp lib/ameba/bin/ameba.cr bin && \
-        crystal build -o bin/ameba bin/ameba.cr
+        crystal build -o bin/ameba bin/ameba.cr)
 hooks:
   before:
     - mkdir -p bin/release bin/debug
