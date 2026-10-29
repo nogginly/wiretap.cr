@@ -50,17 +50,13 @@ jobs:
 
       # ---- Source lint and formatting check on Ubuntu / x86 only
 
-      - name: Setup debug environment (Unix)
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: mkdir -p bin/debug
-
       - name: Check formatting (Linux)
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: crystal tool format --check
 
       - name: Build ameba  (Linux)
         if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: cp lib/ameba/bin/ameba.cr bin && crystal build -o bin/ameba bin/ameba.cr
+        run: mkdir -p bin && cp lib/ameba/bin/ameba.cr bin && crystal build -o bin/ameba bin/ameba.cr
 
       - name: Run static code analysis (Linux)
         if: ${{ matrix.os == 'ubuntu-latest' }}
