@@ -7,6 +7,7 @@ require "./wiretap/config"
 require "./wiretap/secret_heuristic"
 require "./wiretap/interaction"
 require "./wiretap/transcript"
+require "./wiretap/tee_io"
 require "./wiretap/interceptor"
 
 # Wiretap records and replays HTTP interactions for deterministic testing.

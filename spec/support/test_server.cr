@@ -66,9 +66,25 @@ class TestServer
         ctx.response.print "#{chunk}\n\n"
         ctx.response.flush
       end
+    when "/stream_endless"
+      stream_endless(ctx)
     else
       ctx.response.status = HTTP::Status::NOT_FOUND
       ctx.response.print %({"error":"not found"})
     end
+  end
+
+  # Sends a numbered SSE event every few milliseconds until the client
+  # disconnects, like a long-lived MCP channel. Capped so a broken client
+  # cannot keep the suite alive forever.
+  private def stream_endless(ctx : HTTP::Server::Context) : Nil
+    ctx.response.headers["Content-Type"] = "text/event-stream"
+    ctx.response.headers["Cache-Control"] = "no-cache"
+    1.upto(2000) do |n|
+      ctx.response.print "data: event #{n}\n\n"
+      ctx.response.flush
+      sleep 5.milliseconds
+    end
+  rescue IO::Error
   end
 end

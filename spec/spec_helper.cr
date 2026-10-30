@@ -58,3 +58,22 @@ def seed_transcript(
   File.write(path, envelope.to_pretty_json)
   path
 end
+
+# Runs the block in a fiber and fails the example if it has not finished
+# within *limit*; re-raises anything the block raised. Guards specs whose
+# failure mode would otherwise be hanging forever.
+def within(limit : Time::Span, &block : ->) : Nil
+  done = Channel(Exception?).new
+  spawn do
+    block.call
+    done.send(nil)
+  rescue ex
+    done.send(ex)
+  end
+  select
+  when result = done.receive
+    raise result if result
+  when timeout(limit)
+    fail "did not finish within #{limit}"
+  end
+end

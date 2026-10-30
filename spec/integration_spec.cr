@@ -409,6 +409,74 @@ describe "Wiretap integration" do
     end
   end
 
+  describe "long-lived streams — record what the caller reads" do
+    it "delivers events as they arrive and records only those read" do
+      events = [] of String
+      within(2.seconds) do
+        Wiretap.intercept("endless_record", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            2.times { events << response.body_io.gets("\n\n").not_nil! }
+          end
+        end
+      end
+
+      events.should eq(["data: event 1\n\n", "data: event 2\n\n"])
+      t = Wiretap::Transcript.load_or_create("endless_record", :once)
+      t.interactions.first.response.body.should eq(events.join)
+    end
+
+    it "records what was read when the caller breaks out of the block" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_break", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            break response.body_io.gets("\n\n")
+          end
+        end
+      end
+
+      t = Wiretap::Transcript.load_or_create("endless_break", :once)
+      t.interactions.first.response.body.should eq("data: event 1\n\n")
+    end
+
+    it "replays the recorded events and then ends the stream" do
+      read_events = -> {
+        Wiretap.intercept("endless_replay", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            2.times { response.body_io.gets("\n\n") }
+          end
+        end
+      }
+      within(2.seconds) { read_events.call }
+      test_server.reset_counts
+
+      replayed = ""
+      Wiretap.intercept("endless_replay", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+          replayed = response.body_io.gets_to_end
+        end
+      end
+
+      test_server.request_counts.fetch("/stream_endless", 0).should eq(0)
+      replayed.should eq("data: event 1\n\ndata: event 2\n\n")
+    end
+
+    it "does not record when the caller's block raises" do
+      expect_raises(Exception, "boom") do
+        within(2.seconds) do
+          Wiretap.intercept("endless_raise", mode: :once) do
+            HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+              response.body_io.gets("\n\n")
+              raise "boom"
+            end
+          end
+        end
+      end
+
+      t = Wiretap::Transcript.load_or_create("endless_raise", :once)
+      t.interactions.should be_empty
+    end
+  end
+
   describe "request normalization" do
     it "stores the raw body as sent, even when normalize_body is configured" do
       Wiretap.configure do |c|
