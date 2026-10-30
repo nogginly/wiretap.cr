@@ -341,6 +341,74 @@ describe "Wiretap integration" do
       end
     end
   end
+  describe "block-form convenience methods — record and replay" do
+    it "records via HTTP::Client#get with a block" do
+      body = ""
+      Wiretap.intercept("block_instance_get", mode: :once) do
+        client = HTTP::Client.new(URI.parse(test_server.base_url))
+        client.get("/stream") { |response| body = response.body_io.gets_to_end }
+      end
+
+      test_server.request_counts["/stream"].should eq(1)
+      body.should contain("[DONE]")
+
+      t = Wiretap::Transcript.load_or_create("block_instance_get", :once)
+      t.interactions.first.response.body.should eq(body)
+    end
+
+    it "replays via HTTP::Client.get with a block without hitting the server" do
+      Wiretap.intercept("block_class_get", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream") { |response| response.body_io.gets_to_end }
+      end
+
+      test_server.reset_counts
+
+      replayed_body = ""
+      Wiretap.intercept("block_class_get", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream") { |response| replayed_body = response.body_io.gets_to_end }
+      end
+
+      test_server.request_counts.fetch("/stream", 0).should eq(0)
+      replayed_body.should contain("Hello")
+      replayed_body.should contain("[DONE]")
+    end
+
+    it "records and replays HTTP::Client.post with a block, matching on body" do
+      2.times do
+        Wiretap.intercept("block_class_post", mode: :once) do
+          HTTP::Client.post("#{test_server.base_url}/chat", body: %({"model":"test"})) do |response|
+            response.status_code.should eq(201)
+            response.body_io.gets_to_end.should contain("msg_001")
+          end
+        end
+      end
+
+      test_server.request_counts["/chat"].should eq(1)
+    end
+
+    it "returns the block's value from the call" do
+      Wiretap.intercept("block_return_value", mode: :once) do
+        status = HTTP::Client.get("#{test_server.base_url}/status", &.status_code)
+        status.should eq(200)
+      end
+    end
+
+    it "raises Wiretap::Error in :none mode when no transcript exists" do
+      expect_raises(Wiretap::Error, /No recorded interaction/) do
+        Wiretap.intercept("block_missing", mode: :none) do
+          HTTP::Client.get("#{test_server.base_url}/status", &.body_io.gets_to_end)
+        end
+      end
+    end
+
+    it "passes through to the real server when no transcript is active" do
+      body = HTTP::Client.get("#{test_server.base_url}/status", &.body_io.gets_to_end)
+
+      body.should eq(%({"status":"ok"}))
+      test_server.request_counts["/status"].should eq(1)
+    end
+  end
+
   describe "request normalization" do
     it "stores the raw body as sent, even when normalize_body is configured" do
       Wiretap.configure do |c|

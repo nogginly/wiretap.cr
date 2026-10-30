@@ -29,33 +29,23 @@ module Wiretap
       end
     end
 
+    # Same as `handle`, but returns a response whose body is readable via
+    # `body_io`, as callers of the block form of `HTTP::Client#exec` expect.
     def self.handle_streaming(
       transcript : Transcript,
       client : HTTP::Client,
       request : HTTP::Request,
-      user_block : HTTP::Client::Response ->,
-      &real_request : (HTTP::Client::Response ->) ->
-    ) : Nil
-      url = build_url(client, request)
+      &real_request : -> HTTP::Client::Response
+    ) : HTTP::Client::Response
+      response = handle(transcript, client, request, &real_request)
+      HTTP::Client::Response.new(response.status, body_io: IO::Memory.new(response.body), headers: response.headers)
+    end
 
-      raw_body = buffer_body(request)
-      normalized_body = raw_body ? Wiretap.config.apply_body_normalization(raw_body) : nil
-      body_digest = compute_body_digest(normalized_body)
-
-      case transcript.mode
-      when :none
-        replay_streaming_or_raise(transcript, request.method, url, body_digest, user_block)
-      when :always
-        record_and_stream(transcript, request, url, raw_body, body_digest, user_block, real_request)
-      when :once
-        if transcript.loaded?
-          replay_streaming_or_raise(transcript, request.method, url, body_digest, user_block)
-        else
-          record_and_stream(transcript, request, url, raw_body, body_digest, user_block, real_request)
-        end
-      else
-        real_request.call(user_block)
-      end
+    # Copies a streamed response into one whose body is a `String`, so it
+    # outlives the connection it was read from.
+    def self.buffer_response(response : HTTP::Client::Response) : HTTP::Client::Response
+      body = response.body_io?.try(&.gets_to_end) || ""
+      HTTP::Client::Response.new(response.status, body: body, headers: response.headers)
     end
 
     private def self.replay_or_raise(transcript : Transcript, method : String, url : String, body_digest : String?) : HTTP::Client::Response
@@ -121,58 +111,6 @@ module Wiretap
       HTTP::Client::Response.new(status, body: body, headers: h)
     end
 
-    private def self.replay_streaming_or_raise(
-      transcript : Transcript,
-      method : String,
-      url : String,
-      body_digest : String?,
-      user_block : HTTP::Client::Response ->,
-    ) : Nil
-      normalized = Wiretap.config.apply_url_normalization(url)
-      interaction = transcript.find_interaction(method, normalized, body_digest)
-      raise Wiretap::Error.new(miss_message(transcript, method, normalized, body_digest)) unless interaction
-
-      h = HTTP::Headers.new
-      interaction.response.headers.each { |k, v| h[k] = v }
-      io = IO::Memory.new(interaction.response.body)
-      response = HTTP::Client::Response.new(interaction.response.status, body_io: io, headers: h)
-      user_block.call(response)
-    end
-
-    private def self.record_and_stream(
-      transcript : Transcript,
-      request : HTTP::Request,
-      url : String,
-      req_body : String?,
-      body_digest : String?,
-      user_block : HTTP::Client::Response ->,
-      real_request : (HTTP::Client::Response ->) ->,
-    ) : Nil
-      real_request.call(->(response : HTTP::Client::Response) {
-        body = response.body_io.gets_to_end
-
-        normalized_url = Wiretap.config.apply_url_normalization(url)
-
-        req_data = RequestData.new(
-          method: request.method,
-          url: normalized_url,
-          headers: filter_headers(request.headers),
-          body: req_body,
-          body_digest: body_digest
-        )
-        resp_data = ResponseData.new(
-          status: response.status.code,
-          headers: normalize_headers(response.headers),
-          body: body
-        )
-        transcript.record(Interaction.new(req_data, resp_data))
-
-        io = IO::Memory.new(body)
-        replayed = HTTP::Client::Response.new(response.status.code, body_io: io, headers: response.headers)
-        user_block.call(replayed)
-      })
-    end
-
     private def self.build_url(client : HTTP::Client, request : HTTP::Request) : String
       scheme = client.tls? ? "https" : "http"
       host = client.host
@@ -236,13 +174,14 @@ class HTTP::Client
     end
   end
 
-  def exec(request : HTTP::Request, &block : HTTP::Client::Response ->)
+  def exec(request : HTTP::Request, &)
     if transcript = Wiretap.active_transcript
-      Wiretap::Interceptor.handle_streaming(transcript, self, request, block) do |inner|
-        previous_def { |response| inner.call(response) }
+      response = Wiretap::Interceptor.handle_streaming(transcript, self, request) do
+        previous_def { |raw| Wiretap::Interceptor.buffer_response(raw) }
       end
+      yield response
     else
-      previous_def { |response| block.call(response) }
+      previous_def { |response| yield response }
     end
   end
 end
