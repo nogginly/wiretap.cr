@@ -27,11 +27,23 @@ module Wiretap
     property headers : Hash(String, String)
     property body : String
 
+    # True when the caller stopped reading a streamed body before the server
+    # ended it, so *body* holds only part of the stream. Omitted from JSON
+    # when false; transcripts without it are read as complete.
+    @[JSON::Field(emit_null: false)]
+    property truncated : Bool?
+
     def initialize(
       @status : Int32,
       @headers : Hash(String, String),
       @body : String,
+      truncated : Bool = false,
     )
+      @truncated = truncated || nil
+    end
+
+    def truncated? : Bool
+      @truncated == true
     end
   end
 

@@ -438,26 +438,88 @@ describe "Wiretap integration" do
       t.interactions.first.response.body.should eq("data: event 1\n\n")
     end
 
-    it "replays the recorded events and then ends the stream" do
-      read_events = -> {
+    it "marks the recording as truncated when the caller stops early" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_flag", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless", &.body_io.gets("\n\n"))
+        end
+      end
+
+      json = File.read(File.join(current_dir[0], "endless_flag.json"))
+      JSON.parse(json)["interactions"][0]["response"]["truncated"].should eq(true)
+    end
+
+    it "replays a truncated recording up to where the caller stopped" do
+      within(2.seconds) do
         Wiretap.intercept("endless_replay", mode: :once) do
           HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
             2.times { response.body_io.gets("\n\n") }
           end
         end
-      }
-      within(2.seconds) { read_events.call }
+      end
       test_server.reset_counts
 
-      replayed = ""
+      events = [] of String?
       Wiretap.intercept("endless_replay", mode: :once) do
         HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
-          replayed = response.body_io.gets_to_end
+          2.times { events << response.body_io.gets("\n\n") }
         end
       end
 
       test_server.request_counts.fetch("/stream_endless", 0).should eq(0)
-      replayed.should eq("data: event 1\n\ndata: event 2\n\n")
+      events.should eq(["data: event 1\n\n", "data: event 2\n\n"])
+    end
+
+    it "raises when replay reads past the end of a truncated recording" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_overread", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless", &.body_io.gets("\n\n"))
+        end
+      end
+
+      expect_raises(Wiretap::Error, /truncated recording for GET .*\/stream_endless/) do
+        Wiretap.intercept("endless_overread", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            2.times { response.body_io.gets("\n\n") }
+          end
+        end
+      end
+    end
+
+    it "records a stream read to its end as complete" do
+      Wiretap.intercept("finite_complete", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream", &.body_io.gets_to_end)
+      end
+
+      json = File.read(File.join(current_dir[0], "finite_complete.json"))
+      JSON.parse(json)["interactions"][0]["response"].as_h.has_key?("truncated").should be_false
+
+      replayed = ""
+      Wiretap.intercept("finite_complete", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream") { |response| replayed = response.body_io.gets_to_end }
+      end
+      replayed.should contain("[DONE]")
+    end
+
+    it "replays a transcript written before the truncated field existed as complete" do
+      url = "#{test_server.base_url}/stream"
+      File.write(File.join(current_dir[0], "legacy_stream.json"), {
+        name:          "legacy_stream",
+        recorded_with: "wiretap/0.4.2",
+        interactions:  [{
+          request:     {method: "GET", url: url, headers: {} of String => String},
+          response:    {status: 200, headers: {"Content-Type" => "text/event-stream"}, body: "data: [DONE]\n\n"},
+          recorded_at: "2026-01-01T00:00:00Z",
+        }],
+      }.to_json)
+
+      replayed = ""
+      Wiretap.intercept("legacy_stream", mode: :none) do
+        HTTP::Client.get(url) { |response| replayed = response.body_io.gets_to_end }
+      end
+
+      replayed.should eq("data: [DONE]\n\n")
+      test_server.request_counts.fetch("/stream", 0).should eq(0)
     end
 
     it "does not record when the caller's block raises" do

@@ -27,15 +27,29 @@ module Wiretap
                   end
       end
 
-      # Returns the recorded response, or raises `Wiretap::Error` on a miss.
+      # Returns the recorded response with its body as a `String`, or raises
+      # `Wiretap::Error` on a miss.
       def replay : HTTP::Client::Response
-        interaction = @transcript.find_interaction(@request.method, @url, @body_digest)
-        raise Wiretap::Error.new(Interceptor.miss_message(@transcript, @request.method, @url, @body_digest)) unless interaction
-        Interceptor.build_response(interaction.response.status, interaction.response.headers, interaction.response.body)
+        recorded = find_or_raise.response
+        Interceptor.build_response(recorded.status, recorded.headers, recorded.body)
+      end
+
+      # Returns the recorded response with its body readable through
+      # `body_io`, or raises `Wiretap::Error` on a miss. Reading past the end
+      # of a truncated recording raises `Wiretap::Error`.
+      def replay_streamed : HTTP::Client::Response
+        recorded = find_or_raise.response
+        body_io = if recorded.truncated?
+                    TruncatedBodyIO.new(recorded.body, "#{@request.method} #{@url}")
+                  else
+                    IO::Memory.new(recorded.body)
+                  end
+        response = Interceptor.build_response(recorded.status, recorded.headers, "")
+        HTTP::Client::Response.new(response.status, body_io: body_io, headers: response.headers)
       end
 
       # Saves the request together with the given response to the transcript.
-      def record(status : Int32, headers : HTTP::Headers, body : String) : Nil
+      def record(status : Int32, headers : HTTP::Headers, body : String, truncated : Bool = false) : Nil
         req_data = RequestData.new(
           method: @request.method,
           url: @url,
@@ -43,8 +57,14 @@ module Wiretap
           body: @raw_body,
           body_digest: @body_digest
         )
-        resp_data = ResponseData.new(status: status, headers: Interceptor.normalize_headers(headers), body: body)
+        resp_data = ResponseData.new(status: status, headers: Interceptor.normalize_headers(headers), body: body, truncated: truncated)
         @transcript.record(Interaction.new(req_data, resp_data))
+      end
+
+      private def find_or_raise : Interaction
+        interaction = @transcript.find_interaction(@request.method, @url, @body_digest)
+        raise Wiretap::Error.new(Interceptor.miss_message(@transcript, @request.method, @url, @body_digest)) unless interaction
+        interaction
       end
     end
 
@@ -65,12 +85,6 @@ module Wiretap
       in .pass_through?
         real_request.call
       end
-    end
-
-    # Returns *response* with its body readable through `body_io`, as callers
-    # of the block form of `HTTP::Client#exec` expect.
-    def self.as_streamed(response : HTTP::Client::Response) : HTTP::Client::Response
-      HTTP::Client::Response.new(response.status, body_io: IO::Memory.new(response.body), headers: response.headers)
     end
 
     # Returns a copy of the live *response* whose `body_io` is a `TeeIO`
@@ -176,12 +190,13 @@ class HTTP::Client
     call = Wiretap::Interceptor::Call.new(transcript, self, request)
     case call.action
     in .replay?
-      yield Wiretap::Interceptor.as_streamed(call.replay)
+      yield call.replay_streamed
     in .pass_through?
       previous_def { |response| yield response }
     in .record?
       # Hand the caller a teed body, then record whatever it read, also when
-      # it leaves early with break or next, but not when it raises.
+      # it leaves early with break or next, but not when it raises. The
+      # recording is truncated unless the caller read to the end of stream.
       previous_def do |raw|
         response, tee = Wiretap::Interceptor.tee(raw)
         failed = false
@@ -191,7 +206,7 @@ class HTTP::Client
           failed = true
           raise ex
         ensure
-          call.record(raw.status.code, raw.headers, tee.captured) unless failed
+          call.record(raw.status.code, raw.headers, tee.captured, truncated: !tee.reached_end?) unless failed
         end
       end
     end
