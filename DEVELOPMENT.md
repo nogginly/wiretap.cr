@@ -2,38 +2,40 @@
 
 ## Dependencies
 
-1. Make sure you have `ops` installed, in one of the following ways:
- - as a gem via `gem install ops_team` or
- - as a tool via `brew tap nickthecook/crops && brew install ops`
-2. If you not using macOS, or a Linux that uses `apt`, please [install Crystal](https://crystal-lang.org/install/)
+1. Install [Crystal](https://crystal-lang.org/install/) 1.20.0 or later.
+2. Install `ops`, either as a gem via `gem install ops_team` or with
+   Homebrew via `brew tap nickthecook/crops && brew install ops`.
+3. Run `ops up` to install the shards and build the `ameba` linter into
+   `bin/ameba`.
 
-## Getting started
+## Commands
 
-Command                        |Description                                                                       
--------------------------------|----------------------------------------------------------------------------------
-`ops up`                       |Gets everything setup including `crystal` via `apt` or `brew` if applicable.      
-`ops build-debug` or `ops bd`  |Make a debug build of `benchmark` sample, in `bin/debug` folder.                  
-`ops build-release` or `ops br`|Make a release / production build of `benchmark` sample,  in `bin/release` folder.
-`ops test_specs`               |Run the test suite (`crystal spec`).                                              
-`ops lint`                     |Run `ameba` on the source code                                                    
-`ops test`                     |Run `ops test_specs` followed by `ops lint` - use this before committing.         
-`ops clean`                    |Remove debug and release build files                                              
-`ops wipe`                     |In addition to cleaning, remove all compiler caches                               
+Command         |Description                                                       
+----------------|------------------------------------------------------------------
+`ops up`        |Install shards; build `bin/ameba` after a fresh install           
+`ops test_specs`|Run the test suite (`crystal spec --order random`)                
+`ops lint`      |Run `ameba` on `src/`                                             
+`ops test`      |Run `ops test_specs` followed by `ops lint`; use before committing
+`ops wipe`      |Clear the Crystal compiler cache                                  
 
-### Build and run for development
+To run a single spec file or example, call `crystal spec` directly, for
+example `crystal spec spec/integration_spec.cr:120`.
 
-Use `ops run samples/<SOURCEFILE>` to compile and run the specific source.
+## Tests
 
-### Build to run later
+Integration specs in `spec/integration_spec.cr` run against a real local
+`HTTP::Server` defined in `spec/support/test_server.cr`, started once per
+suite on a free port. It counts requests per path, so specs can assert
+whether a request reached the server or was replayed from a transcript.
 
-Run `ops build-release` to make a release build in the `bin/release/` folder
+## Continuous integration
 
-Run `ops build-debug` to make a debug build in the `bin/debug/` folder
-
-## Samples
-
-TODO
+GitHub Actions runs on pushes to `main` and on pull requests targeting
+`main`, across Linux (x86 and ARM), macOS and Windows. It checks formatting
+with `crystal tool format --check`, lints `src/` with `ameba`, and runs the
+specs. Run `crystal tool format` before committing to avoid a formatting
+failure.
 
 ## Contributions
 
-See [README](./README.md)
+See [README](./README.md).
