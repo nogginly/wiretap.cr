@@ -214,11 +214,19 @@ transcript by hand - any valid JSON file in `spec/transcripts/` works.
 
 ### Streaming responses (SSE)
 
-LLM APIs that stream tokens use Server-Sent Events over a chunked HTTP
-response. Wiretap handles these through the block form of `HTTP::Client#exec`.
-On record it buffers the full stream and saves it to the transcript. On replay
-it wraps the stored body in `IO::Memory`, satisfying the `body_io` contract so
-your parsing code runs identically against live and replayed responses.
+LLM APIs that stream tokens, and MCP servers that keep a channel open, use
+Server-Sent Events over a chunked HTTP response. Wiretap handles these
+through the block form of `HTTP::Client`: `exec(request) { }` as well as the
+convenience methods such as `get(url) { }` and `post(url, body: ...) { }`.
+Your code reads `response.body_io` exactly as it would without Wiretap.
+
+- **Record:** Wiretap hands your block a `body_io` that passes each event
+  through as it arrives and keeps a copy. When the block finishes, Wiretap
+  saves whatever your code read. A long-lived stream is therefore fine:
+  stop reading when your test has what it needs, and that is what gets
+  recorded.
+- **Replay:** Wiretap serves the recorded body from memory, so `each_line`
+  and `gets` parsing behaves the same as against the live server.
 
 ```crystal
 it "streams a completion" do
@@ -243,34 +251,51 @@ it "streams a completion" do
 end
 ```
 
-The transcript stores the full SSE body as a single string - chunk boundaries
-are preserved in the content, so `each_line` iteration works identically during
-replay.
+The transcript stores the SSE body as a single string. Event boundaries are
+preserved in the content, so line-by-line parsing works identically during
+replay. Event timing is not preserved: on replay every event is available
+at once.
 
 ```mermaid
 sequenceDiagram
     participant T as Test code
     participant W as Wiretap
-    participant C as HTTP::Client
     participant S as Real server
     participant D as Transcript (disk)
 
-    Note over W,D: First run - record
-    T->>W: intercept("name") do ... end
-    W->>C: exec(request) { |r| ... }
-    C->>S: real HTTP request
-    S-->>C: chunked SSE stream
-    C-->>W: body_io (buffered)
-    W->>D: save full body as string
-    W-->>T: replayed IO::Memory
+    Note over T,D: First run - record
+    T->>W: get(url) { |r| ... }
+    W->>S: real HTTP request
+    S-->>W: live SSE stream
+    W-->>T: body_io that copies what is read
+    T->>W: reads events, block returns
+    W->>D: save the events that were read
 
-    Note over W,D: Subsequent runs - replay
-    T->>W: intercept("name") do ... end
+    Note over T,D: Subsequent runs - replay
+    T->>W: get(url) { |r| ... }
     W->>D: find_interaction(method, url, digest)
     D-->>W: stored body string
-    W-->>T: IO::Memory (no network call)
+    W-->>T: body_io over the stored body (no network call)
 ```
 
+#### Long-lived streams and truncated recordings
+
+If your block stops reading before the server ends the stream, the saved
+interaction is marked `"truncated": true`. On replay, a truncated recording
+serves the events that were read and then raises `Wiretap::Error` if your
+code reads further, rather than pretending the server closed the stream.
+The fix is to re-record with the test reading as far as it now needs.
+
+A recording counts as complete only when your code actually reached the end
+of the stream. If it stops right after the last event of a finite stream,
+without reading on to the end, the recording is marked truncated. Replaying
+the same reads still works; only reading further raises.
+
+Two more behaviours worth knowing:
+
+- If your block raises, nothing is recorded for that request, so a failed
+  first run under `:once` does not leave a transcript behind.
+- Leaving the block early with `break` or `next` still records what was read.
 
 ### Request normalization
 
@@ -366,7 +391,7 @@ A transcript is a plain JSON file you can read, edit, and commit:
 ```json
 {
   "name": "chat_completion",
-  "recorded_with": "wiretap/0.4.0",
+  "recorded_with": "wiretap/0.5.0",
   "interactions": [
     {
       "request": {
@@ -391,6 +416,12 @@ A transcript is a plain JSON file you can read, edit, and commit:
   ]
 }
 ```
+
+A response read through the block form of `HTTP::Client` can also carry
+`"truncated": true` (see
+[Long-lived streams and truncated recordings](#long-lived-streams-and-truncated-recordings)).
+The field is omitted when false, and transcripts recorded before it existed
+replay as complete.
 
 The request `body` is always the exact body that was sent over the wire,
 even if `normalize_body` is configured - normalization affects matching

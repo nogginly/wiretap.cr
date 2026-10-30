@@ -1,6 +1,8 @@
 require "spec"
 require "file_utils"
+require "http/server"
 require "../src/wiretap"
+require "./support/*"
 
 # Reset Wiretap config and recording state before every example so tests
 # are independent — other spec files record interactions too, and
@@ -55,4 +57,23 @@ def seed_transcript(
   path = File.join(dir, "#{name}.json")
   File.write(path, envelope.to_pretty_json)
   path
+end
+
+# Runs the block in a fiber and fails the example if it has not finished
+# within *limit*; re-raises anything the block raised. Guards specs whose
+# failure mode would otherwise be hanging forever.
+def within(limit : Time::Span, &block : ->) : Nil
+  done = Channel(Exception?).new
+  spawn do
+    block.call
+    done.send(nil)
+  rescue ex
+    done.send(ex)
+  end
+  select
+  when result = done.receive
+    raise result if result
+  when timeout(limit)
+    fail "did not finish within #{limit}"
+  end
 end

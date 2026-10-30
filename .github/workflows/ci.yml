@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, crystal: "1.20" }
+          - { os: ubuntu-24.04-arm, crystal: "1.21" }
+          - { os: macos-latest, crystal: "1.22" }
+          - { os: windows-2025, crystal: "1.20" }
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Force apt update (Linux only)
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo -n apt-get update
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{matrix.crystal}}
+
+      - name: Cache shards
+        uses: actions/cache@v5
+        with:
+          path: |
+            lib
+            bin/ameba*
+          key: ${{ matrix.os }}-crystal-${{matrix.crystal}}-shards-${{ hashFiles('**/shard.lock') }}
+
+      - name: Install shards
+        run: shards check || shards install
+
+      # ---- Run tests on all platforms
+
+      - name: Run tests
+        run: crystal spec --order random
+
+      # ---- Source lint and formatting check on Ubuntu / x86 only
+
+      - name: Check formatting (Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: crystal tool format --check
+
+      - name: Build ameba  (Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: mkdir -p bin && cp lib/ameba/bin/ameba.cr bin && crystal build -o bin/ameba bin/ameba.cr
+
+      - name: Run static code analysis (Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: bin/ameba src/

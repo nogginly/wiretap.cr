@@ -1,81 +1,6 @@
 require "./spec_helper"
 
 # ---------------------------------------------------------------------------
-# Integration specs — real HTTP::Server, real sockets, real IO.
-#
-# A single TestServer instance is started once for the suite and shared
-# across all examples. Each endpoint tracks how many times it was called
-# so specs can assert whether a request hit the real server or was replayed
-# from a transcript without touching the network.
-# ---------------------------------------------------------------------------
-
-class TestServer
-  getter request_counts : Hash(String, Int32)
-
-  @server : HTTP::Server
-  @base_url : String
-
-  def initialize
-    @request_counts = Hash(String, Int32).new(0)
-    @base_url = ""
-    @server = HTTP::Server.new { |ctx| handle(ctx) }
-  end
-
-  # Binds to an OS-assigned free port and starts listening in a fiber.
-  # Returns the base URL callers should use, e.g. "http://localhost:54321".
-  def start : String
-    address = @server.bind_unused_port
-    spawn { @server.listen }
-    @base_url = "http://#{address}"
-  end
-
-  def close : Nil
-    @server.close
-  end
-
-  def base_url : String
-    @base_url
-  end
-
-  # Resets all counters between examples.
-  def reset_counts : Nil
-    @request_counts.transform_values! { 0 }
-  end
-
-  private def handle(ctx : HTTP::Server::Context) : Nil
-    path = ctx.request.path
-    @request_counts[path] = @request_counts.fetch(path, 0) + 1
-
-    ctx.response.content_type = "application/json"
-
-    case path
-    when "/status"
-      ctx.response.print %({"status":"ok"})
-    when "/chat"
-      ctx.response.status = HTTP::Status::CREATED
-      ctx.response.print %({"id":"msg_001","content":"Hello!"})
-    when "/error"
-      ctx.response.status = HTTP::Status::INTERNAL_SERVER_ERROR
-      ctx.response.print %({"error":"something went wrong"})
-    when "/stream"
-      ctx.response.headers["Content-Type"] = "text/event-stream"
-      ctx.response.headers["Cache-Control"] = "no-cache"
-      [
-        %(data: {"delta":{"content":"Hello"}}),
-        %(data: {"delta":{"content":" world"}}),
-        "data: [DONE]",
-      ].each do |chunk|
-        ctx.response.print "#{chunk}\n\n"
-        ctx.response.flush
-      end
-    else
-      ctx.response.status = HTTP::Status::NOT_FOUND
-      ctx.response.print %({"error":"not found"})
-    end
-  end
-end
-
-# ---------------------------------------------------------------------------
 # Suite setup — server starts once for the whole file.
 # Per-example transcript dir is handled inside the describe block.
 # ---------------------------------------------------------------------------
@@ -416,6 +341,204 @@ describe "Wiretap integration" do
       end
     end
   end
+  describe "block-form convenience methods — record and replay" do
+    it "records via HTTP::Client#get with a block" do
+      body = ""
+      Wiretap.intercept("block_instance_get", mode: :once) do
+        client = HTTP::Client.new(URI.parse(test_server.base_url))
+        client.get("/stream") { |response| body = response.body_io.gets_to_end }
+      end
+
+      test_server.request_counts["/stream"].should eq(1)
+      body.should contain("[DONE]")
+
+      t = Wiretap::Transcript.load_or_create("block_instance_get", :once)
+      t.interactions.first.response.body.should eq(body)
+    end
+
+    it "replays via HTTP::Client.get with a block without hitting the server" do
+      Wiretap.intercept("block_class_get", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream") { |response| response.body_io.gets_to_end }
+      end
+
+      test_server.reset_counts
+
+      replayed_body = ""
+      Wiretap.intercept("block_class_get", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream") { |response| replayed_body = response.body_io.gets_to_end }
+      end
+
+      test_server.request_counts.fetch("/stream", 0).should eq(0)
+      replayed_body.should contain("Hello")
+      replayed_body.should contain("[DONE]")
+    end
+
+    it "records and replays HTTP::Client.post with a block, matching on body" do
+      2.times do
+        Wiretap.intercept("block_class_post", mode: :once) do
+          HTTP::Client.post("#{test_server.base_url}/chat", body: %({"model":"test"})) do |response|
+            response.status_code.should eq(201)
+            response.body_io.gets_to_end.should contain("msg_001")
+          end
+        end
+      end
+
+      test_server.request_counts["/chat"].should eq(1)
+    end
+
+    it "returns the block's value from the call" do
+      Wiretap.intercept("block_return_value", mode: :once) do
+        status = HTTP::Client.get("#{test_server.base_url}/status", &.status_code)
+        status.should eq(200)
+      end
+    end
+
+    it "raises Wiretap::Error in :none mode when no transcript exists" do
+      expect_raises(Wiretap::Error, /No recorded interaction/) do
+        Wiretap.intercept("block_missing", mode: :none) do
+          HTTP::Client.get("#{test_server.base_url}/status", &.body_io.gets_to_end)
+        end
+      end
+    end
+
+    it "passes through to the real server when no transcript is active" do
+      body = HTTP::Client.get("#{test_server.base_url}/status", &.body_io.gets_to_end)
+
+      body.should eq(%({"status":"ok"}))
+      test_server.request_counts["/status"].should eq(1)
+    end
+  end
+
+  describe "long-lived streams — record what the caller reads" do
+    it "delivers events as they arrive and records only those read" do
+      events = [] of String
+      within(2.seconds) do
+        Wiretap.intercept("endless_record", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            2.times { events << response.body_io.gets("\n\n").not_nil! }
+          end
+        end
+      end
+
+      events.should eq(["data: event 1\n\n", "data: event 2\n\n"])
+      t = Wiretap::Transcript.load_or_create("endless_record", :once)
+      t.interactions.first.response.body.should eq(events.join)
+    end
+
+    it "records what was read when the caller breaks out of the block" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_break", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            break response.body_io.gets("\n\n")
+          end
+        end
+      end
+
+      t = Wiretap::Transcript.load_or_create("endless_break", :once)
+      t.interactions.first.response.body.should eq("data: event 1\n\n")
+    end
+
+    it "marks the recording as truncated when the caller stops early" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_flag", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless", &.body_io.gets("\n\n"))
+        end
+      end
+
+      json = File.read(File.join(current_dir[0], "endless_flag.json"))
+      JSON.parse(json)["interactions"][0]["response"]["truncated"].should eq(true)
+    end
+
+    it "replays a truncated recording up to where the caller stopped" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_replay", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            2.times { response.body_io.gets("\n\n") }
+          end
+        end
+      end
+      test_server.reset_counts
+
+      events = [] of String?
+      Wiretap.intercept("endless_replay", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+          2.times { events << response.body_io.gets("\n\n") }
+        end
+      end
+
+      test_server.request_counts.fetch("/stream_endless", 0).should eq(0)
+      events.should eq(["data: event 1\n\n", "data: event 2\n\n"])
+    end
+
+    it "raises when replay reads past the end of a truncated recording" do
+      within(2.seconds) do
+        Wiretap.intercept("endless_overread", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless", &.body_io.gets("\n\n"))
+        end
+      end
+
+      expect_raises(Wiretap::Error, /truncated recording for GET .*\/stream_endless/) do
+        Wiretap.intercept("endless_overread", mode: :once) do
+          HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+            2.times { response.body_io.gets("\n\n") }
+          end
+        end
+      end
+    end
+
+    it "records a stream read to its end as complete" do
+      Wiretap.intercept("finite_complete", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream", &.body_io.gets_to_end)
+      end
+
+      json = File.read(File.join(current_dir[0], "finite_complete.json"))
+      JSON.parse(json)["interactions"][0]["response"].as_h.has_key?("truncated").should be_false
+
+      replayed = ""
+      Wiretap.intercept("finite_complete", mode: :once) do
+        HTTP::Client.get("#{test_server.base_url}/stream") { |response| replayed = response.body_io.gets_to_end }
+      end
+      replayed.should contain("[DONE]")
+    end
+
+    it "replays a transcript written before the truncated field existed as complete" do
+      url = "#{test_server.base_url}/stream"
+      File.write(File.join(current_dir[0], "legacy_stream.json"), {
+        name:          "legacy_stream",
+        recorded_with: "wiretap/0.4.2",
+        interactions:  [{
+          request:     {method: "GET", url: url, headers: {} of String => String},
+          response:    {status: 200, headers: {"Content-Type" => "text/event-stream"}, body: "data: [DONE]\n\n"},
+          recorded_at: "2026-01-01T00:00:00Z",
+        }],
+      }.to_json)
+
+      replayed = ""
+      Wiretap.intercept("legacy_stream", mode: :none) do
+        HTTP::Client.get(url) { |response| replayed = response.body_io.gets_to_end }
+      end
+
+      replayed.should eq("data: [DONE]\n\n")
+      test_server.request_counts.fetch("/stream", 0).should eq(0)
+    end
+
+    it "does not record when the caller's block raises" do
+      expect_raises(Exception, "boom") do
+        within(2.seconds) do
+          Wiretap.intercept("endless_raise", mode: :once) do
+            HTTP::Client.get("#{test_server.base_url}/stream_endless") do |response|
+              response.body_io.gets("\n\n")
+              raise "boom"
+            end
+          end
+        end
+      end
+
+      t = Wiretap::Transcript.load_or_create("endless_raise", :once)
+      t.interactions.should be_empty
+    end
+  end
+
   describe "request normalization" do
     it "stores the raw body as sent, even when normalize_body is configured" do
       Wiretap.configure do |c|
